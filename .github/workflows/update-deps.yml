@@ -1,0 +1,79 @@
+name: Auto Update Dependencies
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [dependency-update]
+
+permissions:
+  contents: write
+
+jobs:
+  update-dependencies:
+    name: Check & Update Core Libraries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+          cache: true
+
+      - name: Update Target Dependencies to Latest
+        run: |
+          echo "Updating badsharing, badrlnc, and badcrypt to @latest..."
+          go get github.com/ihatemyfcklife/badsharing@latest \
+                 github.com/ihatemyfcklife/badrlnc@latest \
+                 github.com/ihatemyfcklife/badcrypt@latest
+          go mod tidy
+
+      - name: Check for Changes
+        id: check_changes
+        run: |
+          if git diff --quiet go.mod go.sum; then
+            echo "All target dependencies are already at their latest versions."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Updates detected in go.mod / go.sum."
+            git diff go.mod
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Tests on Updated Codebase
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          echo "Running test suite against updated dependencies..."
+          go test -v ./...
+
+      - name: Rebuild WebAssembly Engine
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          echo "Compiling web/main.wasm..."
+          GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o web/main.wasm ./cmd/wasm
+
+      - name: Commit and Push Updates
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Extract updated versions for the commit message
+          SHARING_VER=$(go list -m -f '{{.Version}}' github.com/ihatemyfcklife/badsharing)
+          RLNC_VER=$(go list -m -f '{{.Version}}' github.com/ihatemyfcklife/badrlnc)
+          CRYPT_VER=$(go list -m -f '{{.Version}}' github.com/ihatemyfcklife/badcrypt)
+
+          COMMIT_MSG="chore(deps): bump badsharing to ${SHARING_VER}, badrlnc to ${RLNC_VER}, badcrypt to ${CRYPT_VER}"
+          echo "Commit message: $COMMIT_MSG"
+
+          git add go.mod go.sum web/main.wasm
+          git commit -m "$COMMIT_MSG"
+          git push origin main
