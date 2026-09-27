@@ -212,6 +212,17 @@ function switchRecvTransport(mode) {
     }
 }
 
+const peerIceConfig = {
+    config: {
+        iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" }
+        ]
+    },
+    debug: 1
+};
+
 // Automated PeerJS Sender Room Arming
 function armSenderRoom(roomId) {
     if (typeof Peer === "undefined") {
@@ -229,9 +240,7 @@ function armSenderRoom(roomId) {
     if (statusText) statusText.innerText = `Arming room ${roomId}...`;
 
     try {
-        senderPeer = new Peer(roomId, {
-            debug: 1
-        });
+        senderPeer = new Peer(roomId, peerIceConfig);
 
         senderPeer.on("open", (id) => {
             if (statusDot) statusDot.className = "status-dot loading";
@@ -298,7 +307,7 @@ function connectToRoom(roomId) {
     if (statusText) statusText.innerText = `Connecting to room ${roomId}...`;
 
     try {
-        receiverPeer = new Peer({ debug: 1 });
+        receiverPeer = new Peer(peerIceConfig);
 
         receiverPeer.on("open", () => {
             const conn = receiverPeer.connect(roomId, {
@@ -534,7 +543,7 @@ async function startSending() {
             bytesSent += frameRes.frame.length;
             frameCount++;
 
-            if (frameCount % 4 === 0) {
+            if (frameCount % 32 === 0) {
                 const stats = window.BadHub.getSenderStats();
                 dataEl.innerText = stats.dataPackets;
                 parityEl.innerText = stats.parityPackets;
@@ -625,11 +634,15 @@ function startReceiving() {
             if (!ingestRes || ingestRes.error) {
                 return;
             }
-            framesEl.innerText = ingestRes.framesReceived;
-            droppedEl.innerText = ingestRes.framesDropped;
 
-            progressBar.style.width = ingestRes.percent.toFixed(1) + "%";
-            percentEl.innerText = ingestRes.percent.toFixed(1) + "%";
+            // Throttle UI updates to prevent mobile DOM thrashing
+            if (ingestRes.framesReceived % 16 === 0 || ingestRes.completed) {
+                framesEl.innerText = ingestRes.framesReceived;
+                droppedEl.innerText = ingestRes.framesDropped;
+
+                progressBar.style.width = ingestRes.percent.toFixed(1) + "%";
+                percentEl.innerText = ingestRes.percent.toFixed(1) + "%";
+            }
 
             if (ingestRes.completed) {
                 // Finalize and verify
