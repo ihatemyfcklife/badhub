@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BadHub - Decentralized WebAssembly P2P File Sharing</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <span class="logo-badge">WASM</span>
+                <span class="logo-title">BADHUB</span>
+                <span class="logo-subtitle">P2P RLNC Engine</span>
+            </div>
+            <div class="engine-status" id="engineStatus">
+                <span class="status-dot loading" id="statusDot"></span>
+                <span id="statusText">Loading WebAssembly Engine...</span>
+            </div>
+        </header>
+
+        <!-- Main Navigation Tabs -->
+        <nav class="tabs-nav">
+            <button class="tab-btn active" id="tabSend" onclick="switchTab('send')">Send File</button>
+            <button class="tab-btn" id="tabRecv" onclick="switchTab('recv')">Receive File</button>
+            <button class="tab-btn" id="tabSim" onclick="switchTab('sim')">One-Click Simulator</button>
+        </nav>
+
+        <!-- Tab 1: Send File -->
+        <section class="tab-content active" id="contentSend">
+            <div class="card">
+                <h2>1. Select File & Configure Encryption</h2>
+                <div class="dropzone" id="sendDropzone">
+                    <input type="file" id="fileInput" class="file-input">
+                    <div class="dropzone-inner">
+                        <div class="drop-icon">[+]</div>
+                        <p class="drop-title" id="dropTitle">Drag and drop file here, or click to browse</p>
+                        <p class="drop-subtitle" id="dropSubtitle">Any file type. Processed strictly client-side.</p>
+                    </div>
+                </div>
+
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="sendPassphrase">Shared Encryption Passphrase</label>
+                        <input type="text" id="sendPassphrase" class="input-text" value="badhub-secure-swarm-v1">
+                        <small>Key derived via PBKDF2-HMAC-SHA256 (100,000 iterations).</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="sendRedundancy">
+                            RLNC Parity Redundancy: <span id="redundancyVal" class="highlight-text">30%</span>
+                        </label>
+                        <input type="range" id="sendRedundancy" class="input-range" min="10" max="100" value="30" step="5" oninput="updateRedundancy(this.value)">
+                        <small>Higher redundancy withstands heavy loss on unstable connections.</small>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>2. Transport & P2P Signaling</h2>
+                <div class="transport-selector">
+                    <label class="radio-label">
+                        <input type="radio" name="sendTransport" value="broadcast" checked onchange="switchSendTransport(this.value)">
+                        <span>BroadcastChannel (Instant Same-Browser / Tab-to-Tab)</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="sendTransport" value="webrtc" onchange="switchSendTransport(this.value)">
+                        <span>WebRTC DataChannel (Direct Cross-Device Internet / LAN)</span>
+                    </label>
+                </div>
+
+                <!-- WebRTC Signaling Box for Sender -->
+                <div id="sendWebRTCBox" class="webrtc-box hidden">
+                    <p class="desc">1. Click "Generate Offer Token" and copy the token to your peer.</p>
+                    <button class="btn btn-secondary" id="btnGenOffer" onclick="generateWebRTCOffer()">Generate Offer Token</button>
+                    <textarea id="txtOffer" class="code-area" placeholder="Offer token will appear here..." readonly></textarea>
+                    
+                    <p class="desc">2. Paste Peer Answer Token below and click Connect:</p>
+                    <textarea id="txtSenderAnswer" class="code-area" placeholder="Paste receiver's Answer token here..."></textarea>
+                    <button class="btn btn-secondary" id="btnConnectSender" onclick="acceptWebRTCAnswer()">Connect Peer</button>
+                </div>
+
+                <div class="action-bar">
+                    <button class="btn btn-primary" id="btnStartSend" onclick="startSending()" disabled>Start P2P Transmission</button>
+                    <button class="btn btn-danger" id="btnStopSend" onclick="stopTransmission()" disabled>Stop</button>
+                </div>
+            </div>
+
+            <!-- Sender Telemetry -->
+            <div class="card telemetry-card" id="senderTelemetryCard">
+                <h2>Transmission Telemetry</h2>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="sendProgressBar" style="width: 0%;"></div>
+                </div>
+                <div class="metrics-grid">
+                    <div class="metric-item">
+                        <span class="metric-label">Status</span>
+                        <span class="metric-value" id="sendMetricStatus">Idle</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Progress</span>
+                        <span class="metric-value" id="sendMetricPercent">0.0%</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Data Shards</span>
+                        <span class="metric-value" id="sendMetricData">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Parity Shards</span>
+                        <span class="metric-value" id="sendMetricParity">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Throughput</span>
+                        <span class="metric-value" id="sendMetricSpeed">0.0 MB/s</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Session ID</span>
+                        <span class="metric-value font-mono" id="sendMetricSession">-</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab 2: Receive File -->
+        <section class="tab-content" id="contentRecv">
+            <div class="card">
+                <h2>1. Reception Parameters</h2>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="recvPassphrase">Shared Encryption Passphrase</label>
+                        <input type="text" id="recvPassphrase" class="input-text" value="badhub-secure-swarm-v1">
+                        <small>Must match the sender's passphrase to decrypt metadata & frames.</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Transport Mode</label>
+                        <div class="transport-selector">
+                            <label class="radio-label">
+                                <input type="radio" name="recvTransport" value="broadcast" checked onchange="switchRecvTransport(this.value)">
+                                <span>BroadcastChannel (Same-Browser Listener)</span>
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="recvTransport" value="webrtc" onchange="switchRecvTransport(this.value)">
+                                <span>WebRTC DataChannel (Cross-Device)</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- WebRTC Signaling Box for Receiver -->
+                <div id="recvWebRTCBox" class="webrtc-box hidden">
+                    <p class="desc">1. Paste the Sender's Offer Token here:</p>
+                    <textarea id="txtRecvOffer" class="code-area" placeholder="Paste sender's Offer token here..."></textarea>
+                    <button class="btn btn-secondary" onclick="generateWebRTCAnswer()">Generate Answer Token</button>
+
+                    <p class="desc">2. Copy this Answer Token back to the Sender:</p>
+                    <textarea id="txtRecvAnswer" class="code-area" placeholder="Answer token will appear here..." readonly></textarea>
+                </div>
+
+                <div class="action-bar">
+                    <button class="btn btn-primary" id="btnStartRecv" onclick="startReceiving()">Start Listening for Incoming Stream</button>
+                    <button class="btn btn-danger" id="btnStopRecv" onclick="stopReceiving()" disabled>Stop</button>
+                </div>
+            </div>
+
+            <!-- Receiver Telemetry -->
+            <div class="card telemetry-card" id="recvTelemetryCard">
+                <h2>Reception & Reconstruction Telemetry</h2>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="recvProgressBar" style="width: 0%;"></div>
+                </div>
+                <div class="metrics-grid">
+                    <div class="metric-item">
+                        <span class="metric-label">Status</span>
+                        <span class="metric-value" id="recvMetricStatus">Awaiting incoming stream...</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">File Received</span>
+                        <span class="metric-value" id="recvMetricFile">-</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Progress</span>
+                        <span class="metric-value" id="recvMetricPercent">0.0%</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Frames Processed</span>
+                        <span class="metric-value" id="recvMetricFrames">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Corrupt / Rejected</span>
+                        <span class="metric-value" id="recvMetricDropped">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Integrity Verification</span>
+                        <span class="metric-value" id="recvMetricIntegrity">-</span>
+                    </div>
+                </div>
+
+                <!-- Download Card (Triggered upon verification) -->
+                <div id="downloadContainer" class="download-container hidden">
+                    <div class="verified-badge">
+                        <span class="badge-icon">[OK]</span>
+                        <span>Cryptographically Verified SHA-256 Bit-Exact Match</span>
+                    </div>
+                    <p id="verifiedChecksum" class="font-mono checksum-display"></p>
+                    <button class="btn btn-success btn-large" id="btnDownload" onclick="triggerDownload()">
+                        Download Reconstructed File
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab 3: One-Click Simulator -->
+        <section class="tab-content" id="contentSim">
+            <div class="card">
+                <h2>On-the-Fly RLNC Recovery Simulator</h2>
+                <p class="desc">
+                    Demonstrates random packet loss recovery in real-time. A sample payload is encoded via 
+                    <strong>badrlnc</strong> sliding-window RLNC over GF(2), encrypted with <strong>badcrypt</strong> AEAD, 
+                    subjected to harsh synthetic packet loss (e.g. 25% drops), and fully reconstructed on-the-fly 
+                    via Gauss-Jordan linear elimination without retransmission delays.
+                </p>
+
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="simPayloadSize">Payload Size (KB)</label>
+                        <input type="number" id="simPayloadSize" class="input-text" value="256" min="32" max="2048" step="32">
+                    </div>
+                    <div class="form-group">
+                        <label for="simLossRate">Simulated Packet Loss: <span id="simLossVal" class="highlight-text">25%</span></label>
+                        <input type="range" id="simLossRate" class="input-range" min="0" max="45" value="25" step="5" oninput="updateSimLoss(this.value)">
+                    </div>
+                </div>
+
+                <div class="action-bar">
+                    <button class="btn btn-primary" id="btnRunSim" onclick="runSimulation()">Execute P2P Loss Recovery Test</button>
+                </div>
+            </div>
+
+            <div class="card telemetry-card" id="simTelemetryCard">
+                <h2>Simulation Execution Telemetry</h2>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="simProgressBar" style="width: 0%;"></div>
+                </div>
+                <div class="metrics-grid">
+                    <div class="metric-item">
+                        <span class="metric-label">Status</span>
+                        <span class="metric-value" id="simMetricStatus">Ready</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Data Frames Emitted</span>
+                        <span class="metric-value" id="simMetricData">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Parity Frames Emitted</span>
+                        <span class="metric-value" id="simMetricParity">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Frames Dropped (Simulated)</span>
+                        <span class="metric-value color-danger" id="simMetricDropped">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Effective Loss Rate</span>
+                        <span class="metric-value" id="simMetricLossPct">0.0%</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Verification Anchor</span>
+                        <span class="metric-value" id="simMetricVerified">-</span>
+                    </div>
+                </div>
+
+                <div id="simLog" class="log-console font-mono"></div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>
+                Powered by <strong>badsharing</strong>, <strong>badrlnc</strong> (GF(2) Linear Network Coding), 
+                and <strong>badcrypt</strong> (Post-Quantum ChaCha20-Poly1305 AEAD).
+            </p>
+            <p>100% Client-Side WebAssembly. Zero Servers. Apache 2.0 Open Source.</p>
+        </footer>
+    </div>
+
+    <!-- Go WebAssembly Execution Bridge -->
+    <script src="wasm_exec.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
