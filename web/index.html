@@ -16,6 +16,7 @@
                 <span class="logo-subtitle">P2P RLNC Engine</span>
             </div>
             <div class="engine-status" id="engineStatus">
+                <span class="privacy-badge badge-turn" id="wakeLockBadge" style="display: none; margin-right: 8px;">Screen Awake</span>
                 <span class="status-dot loading" id="statusDot"></span>
                 <span id="statusText">Loading WebAssembly Engine...</span>
             </div>
@@ -37,7 +38,7 @@
                     <div class="dropzone-inner">
                         <div class="drop-icon">[+]</div>
                         <p class="drop-title" id="dropTitle">Drag and drop file here, or click to browse</p>
-                        <p class="drop-subtitle" id="dropSubtitle">Any file type. Processed strictly client-side.</p>
+                        <p class="drop-subtitle" id="dropSubtitle">Any file size (0 RAM streaming). Processed strictly client-side.</p>
                     </div>
                 </div>
 
@@ -269,7 +270,7 @@
                         </label>
                         <span class="privacy-badge badge-direct" id="recvDiskBadge">Streams API</span>
                     </div>
-                    <p class="privacy-hint">Streams decoded blocks directly to disk via FileSystemWritableFileStream, eliminating browser RAM limits for multi-gigabyte transfers.</p>
+                    <p class="privacy-hint">Streams decoded blocks directly to disk via FileSystemWritableFileStream or OPFS, eliminating browser RAM limits across Chrome, Edge, Firefox, and Safari.</p>
 
                     <div class="privacy-header" style="margin-top: 10px;">
                         <label class="toggle-label" for="recvSwarmSeedToggle">

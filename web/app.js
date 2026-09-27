@@ -21,6 +21,9 @@ let swarmSeedEnabled = true;
 let diskFileHandle = null;
 let diskWritableStream = null;
 let diskWriteChain = Promise.resolve();
+let isOpfsMode = false;
+let opfsFileHandle = null;
+let wakeLock = null;
 let pendingMetaBytes = null;
 let pendingMetaInfo = null;
 let currentReceiverMeta = null;
@@ -266,13 +269,52 @@ function switchRecvTransport(mode) {
 }
 
 // ==========================================
+// SCREEN WAKE LOCK API (MOBILE KEEP-AWAKE)
+// ==========================================
+
+async function acquireWakeLock() {
+    if ("wakeLock" in navigator) {
+        try {
+            if (!wakeLock) {
+                wakeLock = await navigator.wakeLock.request("screen");
+                wakeLock.addEventListener("release", () => {
+                    wakeLock = null;
+                    const badge = document.getElementById("wakeLockBadge");
+                    if (badge) badge.style.display = "none";
+                });
+                const badge = document.getElementById("wakeLockBadge");
+                if (badge) badge.style.display = "inline-block";
+            }
+        } catch (err) {
+            console.warn("WakeLock request error:", err);
+        }
+    }
+}
+
+function releaseWakeLock() {
+    if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+    }
+    const badge = document.getElementById("wakeLockBadge");
+    if (badge) badge.style.display = "none";
+}
+
+document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState === "visible" && (isTransmitting || isReceiving)) {
+        await acquireWakeLock();
+    }
+});
+
+// ==========================================
 // IP PRIVACY & TURN RELAY CONFIGURATION
 // ==========================================
 
 const DEFAULT_STUN_SERVERS = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" }
+    { urls: "stun:stun.cloudflare.com:3478" },
+    { urls: "stun:stun.services.mozilla.com:3478" }
 ];
 
 const OPENRELAY_SERVERS = [
@@ -282,7 +324,9 @@ const OPENRELAY_SERVERS = [
             "turn:openrelay.metered.ca:443",
             "turn:openrelay.metered.ca:443?transport=tcp",
             "turns:openrelay.metered.ca:443",
-            "turns:openrelay.metered.ca:443?transport=tcp"
+            "turns:openrelay.metered.ca:443?transport=tcp",
+            "turn:openrelay.metered.ca:5349",
+            "turns:openrelay.metered.ca:5349"
         ],
         username: "openrelayproject",
         credential: "openrelayproject"
@@ -343,7 +387,7 @@ function toggleSendRelay(checked) {
 
     if (currentRoomId) {
         updateMagicLink(currentRoomId);
-        if (selectedFileData && document.querySelector('input[name="sendTransport"]:checked')?.value === "magic") {
+        if (selectedFile && document.querySelector('input[name="sendTransport"]:checked')?.value === "magic") {
             armSenderRoom(currentRoomId);
         }
     }
@@ -366,14 +410,20 @@ function toggleDirectDisk(checked) {
     directDiskEnabled = checked;
     const badge = document.getElementById("recvDiskBadge");
     if (!badge) return;
+    const hasSavePicker = typeof window.showSaveFilePicker === "function";
+    const hasOPFS = typeof navigator !== "undefined" && navigator.storage && typeof navigator.storage.getDirectory === "function";
+
     if (checked) {
-        if (typeof window.showSaveFilePicker === "function") {
-            badge.innerText = "Streams API Active";
+        if (hasSavePicker) {
+            badge.innerText = "Streams API (Direct Disk)";
+            badge.className = "privacy-badge badge-turn";
+        } else if (hasOPFS) {
+            badge.innerText = "OPFS Disk Stream (Safari/Firefox)";
             badge.className = "privacy-badge badge-turn";
         } else {
             badge.innerText = "Not Supported (Memory Mode)";
             badge.className = "privacy-badge badge-direct";
-            alert("File System Access API (showSaveFilePicker) is not supported in this browser. Falling back to RAM buffer mode.");
+            alert("Disk streaming APIs (FileSystem Access / OPFS) are not supported in this browser. Falling back to RAM buffer mode.");
             document.getElementById("recvDirectDiskToggle").checked = false;
             directDiskEnabled = false;
         }
@@ -405,6 +455,7 @@ async function confirmDiskDestination() {
         diskFileHandle = await window.showSaveFilePicker({ suggestedName });
         diskWritableStream = await diskFileHandle.createWritable();
         diskWriteChain = Promise.resolve();
+        isOpfsMode = false;
 
         const promptBox = document.getElementById("recvDiskPrompt");
         if (promptBox) promptBox.classList.add("hidden");
@@ -426,11 +477,42 @@ async function confirmDiskDestination() {
 
 function onCustomTurnChange(prefix) {
     const isSender = (prefix === "send");
-    if (isSender) {
-        if (currentRoomId && selectedFileData) {
-            armSenderRoom(currentRoomId);
-        }
+    const url = document.getElementById(prefix + "TurnUrl")?.value.trim() || "";
+    const user = document.getElementById(prefix + "TurnUser")?.value.trim() || "";
+    const pass = document.getElementById(prefix + "TurnPass")?.value.trim() || "";
+
+    const otherPrefix = isSender ? "recv" : "send";
+    const otherUrl = document.getElementById(otherPrefix + "TurnUrl");
+    const otherUser = document.getElementById(otherPrefix + "TurnUser");
+    const otherPass = document.getElementById(otherPrefix + "TurnPass");
+    if (otherUrl && !otherUrl.value) otherUrl.value = url;
+    if (otherUser && !otherUser.value) otherUser.value = user;
+    if (otherPass && !otherPass.value) otherPass.value = pass;
+
+    try {
+        localStorage.setItem("badhub_turn_config", JSON.stringify({ url, user, pass }));
+    } catch (e) {}
+
+    if (isSender && currentRoomId && selectedFile) {
+        armSenderRoom(currentRoomId);
     }
+}
+
+function restoreSavedTurnConfig() {
+    try {
+        const saved = localStorage.getItem("badhub_turn_config");
+        if (saved) {
+            const cfg = JSON.parse(saved);
+            ["send", "recv"].forEach(p => {
+                const urlEl = document.getElementById(p + "TurnUrl");
+                const userEl = document.getElementById(p + "TurnUser");
+                const passEl = document.getElementById(p + "TurnPass");
+                if (urlEl && cfg.url) urlEl.value = cfg.url;
+                if (userEl && cfg.user) userEl.value = cfg.user;
+                if (passEl && cfg.pass) passEl.value = cfg.pass;
+            });
+        }
+    } catch (e) {}
 }
 
 // ==========================================
@@ -440,7 +522,9 @@ function onCustomTurnChange(prefix) {
 const NOSTR_RELAYS = [
     "wss://relay.damus.io",
     "wss://nos.lol",
-    "wss://nostr.mom"
+    "wss://nostr.mom",
+    "wss://relay.nostr.band",
+    "wss://relay.snort.social"
 ];
 
 let nostrPool = null;
@@ -795,8 +879,9 @@ fileInput.addEventListener("change", e => {
 
 function handleFileSelect(file) {
     selectedFile = file;
+    selectedFileData = null; // Do NOT buffer full file in RAM!
     document.getElementById("dropTitle").innerText = `Selected: ${file.name} (${formatBytes(file.size)})`;
-    document.getElementById("dropSubtitle").innerText = "Reading file into WebAssembly memory...";
+    document.getElementById("dropSubtitle").innerText = "Ready for transmission (0 RAM on-demand streaming). Configure parameters and start.";
 
     if (!currentRoomId) {
         currentRoomId = generateRoomId();
@@ -811,18 +896,12 @@ function handleFileSelect(file) {
         armSenderNostrRoom(currentRoomId);
     }
 
-    const reader = new FileReader();
-    reader.onload = e => {
-        selectedFileData = new Uint8Array(e.target.result);
-        document.getElementById("dropSubtitle").innerText = "Ready for transmission. Configure parameters and start.";
-        checkSenderReady();
-    };
-    reader.readAsArrayBuffer(file);
+    checkSenderReady();
 }
 
 function checkSenderReady() {
     const btn = document.getElementById("btnStartSend");
-    if (selectedFileData && window.BadHub && window.BadHub.ready && !isTransmitting) {
+    if (selectedFile && window.BadHub && window.BadHub.ready && !isTransmitting) {
         btn.disabled = false;
     } else {
         btn.disabled = true;
@@ -834,11 +913,13 @@ function checkSenderReady() {
 // ==========================================
 
 async function startSending() {
-    if (!selectedFileData || !window.BadHub) return;
+    if (!selectedFile || !window.BadHub) return;
 
     isTransmitting = true;
     document.getElementById("btnStartSend").disabled = true;
     document.getElementById("btnStopSend").disabled = false;
+
+    await acquireWakeLock();
 
     const passphrase = document.getElementById("sendPassphrase").value || "badhub-default-secret";
     const redundancy = parseFloat(document.getElementById("sendRedundancy").value) / 100.0;
@@ -852,12 +933,41 @@ async function startSending() {
     const sessionEl = document.getElementById("sendMetricSession");
     const progressBar = document.getElementById("sendProgressBar");
 
-    statusEl.innerText = "Initializing RLNC Engine...";
+    statusEl.innerText = "Computing SHA-256 integrity anchor...";
+    progressBar.style.width = "0%";
+    percentEl.innerText = "0.0%";
 
-    // 1. Initialize Sender in Go WASM
-    const res = window.BadHub.initSender(selectedFile.name, selectedFileData, passphrase, redundancy, 64, 64);
-    if (!res.success) {
-        alert("Failed to initialize sender: " + res.error);
+    // Compute SHA-256 in small 2 MB slices with live progress
+    const hasherId = window.BadHub.createSha256();
+    const hashChunkSize = 2 * 1024 * 1024;
+    for (let offset = 0; offset < selectedFile.size; offset += hashChunkSize) {
+        if (!isTransmitting) {
+            releaseWakeLock();
+            return;
+        }
+        const end = Math.min(selectedFile.size, offset + hashChunkSize);
+        const slice = await selectedFile.slice(offset, end).arrayBuffer();
+        window.BadHub.updateSha256(hasherId, new Uint8Array(slice));
+        const hashPct = Math.round((end / selectedFile.size) * 100);
+        progressBar.style.width = (hashPct * 0.05) + "%";
+        statusEl.innerText = `Computing SHA-256 integrity anchor (${hashPct}%)...`;
+        if (offset % (8 * hashChunkSize) === 0) {
+            await new Promise(r => setTimeout(r, 0));
+        }
+    }
+    const checksumHex = window.BadHub.finalizeSha256(hasherId);
+    if (!checksumHex || !isTransmitting) {
+        releaseWakeLock();
+        return;
+    }
+
+    statusEl.innerText = "Initializing RLNC Streaming Engine...";
+
+    // 1. Initialize Streaming Sender in Go WASM (0 RAM overhead)
+    const res = window.BadHub.initStreamingSender(selectedFile.name, selectedFile.size, checksumHex, passphrase, redundancy, 64, 64);
+    if (!res || !res.success) {
+        alert("Failed to initialize sender: " + (res ? res.error : "unknown error"));
+        releaseWakeLock();
         stopTransmission();
         return;
     }
@@ -947,9 +1057,19 @@ async function startSending() {
     const startTime = performance.now();
     let bytesSent = 0;
     let frameCount = 0;
+    let fileReadOffset = 0;
+    const streamSliceSize = 64 * 1024; // 64 KB streaming buffer
 
     // 3. Frame Emission Loop
     while (isTransmitting) {
+        // Feed chunks into WASM pipe if buffer level is low
+        while (isTransmitting && window.BadHub.getSenderBufferLevel() < streamSliceSize * 2 && fileReadOffset < selectedFile.size) {
+            const end = Math.min(selectedFile.size, fileReadOffset + streamSliceSize);
+            const sliceBuf = await selectedFile.slice(fileReadOffset, end).arrayBuffer();
+            window.BadHub.feedSenderChunk(new Uint8Array(sliceBuf));
+            fileReadOffset = end;
+        }
+
         const frameRes = window.BadHub.nextSenderFrame();
         if (frameRes.error) {
             statusEl.innerText = "Error: " + frameRes.error;
@@ -1000,6 +1120,7 @@ async function startSending() {
     document.getElementById("btnStopSend").disabled = true;
     document.getElementById("btnStartSend").disabled = false;
     isTransmitting = false;
+    releaseWakeLock();
     if (window.BadHub && window.BadHub.resetSession) {
         window.BadHub.resetSession();
     }
@@ -1007,6 +1128,7 @@ async function startSending() {
 
 function stopTransmission() {
     isTransmitting = false;
+    releaseWakeLock();
     document.getElementById("btnStopSend").disabled = true;
     document.getElementById("btnStartSend").disabled = false;
     document.getElementById("sendMetricStatus").innerText = "Stopped";
@@ -1025,16 +1147,39 @@ function stopTransmission() {
 
 let receiverInitialized = false;
 
-function setupReceiver(bytes, passphrase) {
+async function setupReceiver(bytes, passphrase) {
     const fileEl = document.getElementById("recvMetricFile");
     const statusEl = document.getElementById("recvMetricStatus");
 
     let initRes;
-    if (directDiskEnabled && diskWritableStream) {
-        const onChunkDecoded = (chunk) => {
-            diskWriteChain = diskWriteChain.then(() => diskWritableStream.write(chunk));
-        };
-        initRes = window.BadHub.initReceiver(bytes, passphrase, onChunkDecoded);
+    if (directDiskEnabled) {
+        const hasSavePicker = typeof window.showSaveFilePicker === "function";
+        const hasOPFS = typeof navigator !== "undefined" && navigator.storage && typeof navigator.storage.getDirectory === "function";
+
+        if (!diskWritableStream && !hasSavePicker && hasOPFS) {
+            try {
+                const testMeta = window.BadHub.initReceiver(bytes, passphrase);
+                if (testMeta && testMeta.success) {
+                    const root = await navigator.storage.getDirectory();
+                    const safeName = testMeta.name.replace(/[/\\?%*:|"<>]/g, '_');
+                    opfsFileHandle = await root.getFileHandle(safeName, { create: true });
+                    diskWritableStream = await opfsFileHandle.createWritable();
+                    diskWriteChain = Promise.resolve();
+                    isOpfsMode = true;
+                }
+            } catch (err) {
+                console.warn("OPFS stream init failed, falling back to memory:", err);
+            }
+        }
+
+        if (diskWritableStream) {
+            const onChunkDecoded = (chunk) => {
+                diskWriteChain = diskWriteChain.then(() => diskWritableStream.write(chunk));
+            };
+            initRes = window.BadHub.initReceiver(bytes, passphrase, onChunkDecoded);
+        } else {
+            initRes = window.BadHub.initReceiver(bytes, passphrase);
+        }
     } else {
         initRes = window.BadHub.initReceiver(bytes, passphrase);
     }
@@ -1046,7 +1191,7 @@ function setupReceiver(bytes, passphrase) {
         const genEl = document.getElementById("recvMetricGen");
         if (genEl) genEl.innerText = `Gen 1 / ${initRes.totalGenerations}`;
         statusEl.innerText = initRes.isStreaming
-            ? "Direct-to-Disk Stream active (0 RAM). Receiving shards..."
+            ? (isOpfsMode ? "OPFS Disk Stream active (Safari/Firefox). Receiving shards..." : "Direct-to-Disk Stream active (0 RAM). Receiving shards...")
             : "Metadata validated. Receiving shards...";
         return true;
     } else {
@@ -1107,6 +1252,10 @@ function startReceiving() {
     pendingMetaBytes = null;
     pendingMetaInfo = null;
     currentReceiverMeta = null;
+    isOpfsMode = false;
+    opfsFileHandle = null;
+
+    acquireWakeLock();
 
     document.getElementById("btnStartRecv").disabled = true;
     document.getElementById("btnStopRecv").disabled = false;
@@ -1140,9 +1289,10 @@ function startReceiving() {
         // Check if metadata packet (< 1380 bytes)
         if (bytes.length < 1380) {
             if (!receiverInitialized) {
-                if (directDiskEnabled && typeof window.showSaveFilePicker === "function" && !diskWritableStream) {
+                const hasSavePicker = typeof window.showSaveFilePicker === "function";
+
+                if (directDiskEnabled && hasSavePicker && !diskWritableStream) {
                     if (!pendingMetaBytes) {
-                        // Inspect metadata
                         const testRes = window.BadHub.initReceiver(bytes, passphrase);
                         if (testRes && testRes.success) {
                             pendingMetaBytes = bytes;
@@ -1162,7 +1312,7 @@ function startReceiving() {
                     return;
                 }
 
-                setupReceiver(bytes, passphrase);
+                await setupReceiver(bytes, passphrase);
             }
             return;
         }
@@ -1209,23 +1359,33 @@ function startReceiving() {
                 // Finalize and verify bit-exact integrity
                 const finalRes = window.BadHub.finalizeReceiver();
                 if (finalRes && finalRes.success) {
-                    statusEl.innerText = finalRes.isStreaming
-                        ? "Transfer Complete & Saved to Disk!"
-                        : "Transfer Complete & Verified!";
-                    integrityEl.innerText = "100% BIT-EXACT MATCH";
-                    integrityEl.className = "metric-value highlight-text";
                     progressBar.style.width = "100%";
                     percentEl.innerText = "100.0%";
+                    integrityEl.innerText = "100% BIT-EXACT MATCH";
+                    integrityEl.className = "metric-value highlight-text";
 
                     const downloadBtn = document.getElementById("btnDownload");
-                    if (finalRes.isStreaming) {
+                    if (isOpfsMode && opfsFileHandle) {
+                        try {
+                            const opfsFile = await opfsFileHandle.getFile();
+                            receivedFileBlob = opfsFile;
+                            receivedFileName = finalRes.name;
+                            downloadBtn.innerText = "Download Reconstructed File (from OPFS Disk)";
+                            downloadBtn.disabled = false;
+                            statusEl.innerText = "Transfer Complete & Saved in OPFS Storage!";
+                        } catch (e) {
+                            console.error("Failed to get OPFS file:", e);
+                        }
+                    } else if (finalRes.isStreaming) {
                         downloadBtn.innerText = "Streamed Directly to Disk (0 RAM)";
                         downloadBtn.disabled = true;
+                        statusEl.innerText = "Transfer Complete & Saved to Disk!";
                     } else {
                         receivedFileBlob = new Blob([finalRes.data]);
                         receivedFileName = finalRes.name;
                         downloadBtn.innerText = "Download Reconstructed File";
                         downloadBtn.disabled = false;
+                        statusEl.innerText = "Transfer Complete & Verified!";
                     }
 
                     document.getElementById("verifiedChecksum").innerText = "SHA-256: " + finalRes.checksum;
@@ -1263,12 +1423,19 @@ function startReceiving() {
 
 function stopReceiving() {
     isReceiving = false;
+    releaseWakeLock();
     document.getElementById("btnStopRecv").disabled = true;
     document.getElementById("btnStartRecv").disabled = false;
     const promptBox = document.getElementById("recvDiskPrompt");
     if (promptBox) promptBox.classList.add("hidden");
     pendingMetaBytes = null;
     pendingMetaInfo = null;
+    if (diskWritableStream) {
+        diskWritableStream.abort().catch(() => {});
+        diskWritableStream = null;
+    }
+    isOpfsMode = false;
+    opfsFileHandle = null;
 
     if (activeNostrReceiverSub) {
         activeNostrReceiverSub.unsub();
@@ -1523,6 +1690,7 @@ function formatBytes(bytes, decimals = 1) {
 // Bootstrap on window load
 window.addEventListener("DOMContentLoaded", () => {
     initWasm();
+    restoreSavedTurnConfig();
     window.addEventListener("hashchange", checkUrlHash);
     const passInput = document.getElementById("sendPassphrase");
     if (passInput) {
@@ -1531,17 +1699,26 @@ window.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    // Check FileSystem Access API support for direct-to-disk streaming
+    // Check FileSystem Access API & OPFS support for direct-to-disk streaming
     const diskToggle = document.getElementById("recvDirectDiskToggle");
     const diskBadge = document.getElementById("recvDiskBadge");
-    if (typeof window.showSaveFilePicker !== "function") {
+    const hasSavePicker = typeof window.showSaveFilePicker === "function";
+    const hasOPFS = typeof navigator !== "undefined" && navigator.storage && typeof navigator.storage.getDirectory === "function";
+
+    if (hasSavePicker) {
+        if (diskToggle) diskToggle.checked = true;
+        toggleDirectDisk(true);
+    } else if (hasOPFS) {
+        if (diskToggle) diskToggle.checked = true;
+        toggleDirectDisk(true);
+    } else {
         if (diskToggle) {
             diskToggle.checked = false;
             diskToggle.disabled = true;
         }
         if (diskBadge) {
             diskBadge.innerText = "Not Supported (Memory Mode)";
-            diskBadge.title = "Browser lacks File System Access API support";
+            diskBadge.title = "Browser lacks File System Access / OPFS API support";
         }
     }
 });

@@ -4,8 +4,10 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"sync"
 	"syscall/js"
 
@@ -13,9 +15,11 @@ import (
 )
 
 type activeSenderState struct {
-	sender *badsharing.Sender
-	meta   *badsharing.FileMetadata
-	key    [32]byte
+	sender      *badsharing.Sender
+	meta        *badsharing.FileMetadata
+	key         [32]byte
+	streamPipe  *bytes.Buffer
+	isStreaming bool
 }
 
 type jsChunkWriter struct {
@@ -44,6 +48,10 @@ var (
 	stateMu       sync.Mutex
 	currentSender *activeSenderState
 	currentRecv   *activeReceiverState
+
+	hasherMu   sync.Mutex
+	hasherSeq  int
+	hasherPool = make(map[int]hash.Hash)
 )
 
 func safeJsFunc(fn func(this js.Value, args []js.Value) any) js.Func {
@@ -60,9 +68,15 @@ func safeJsFunc(fn func(this js.Value, args []js.Value) any) js.Func {
 func main() {
 	hub := js.Global().Get("Object").New()
 
-	hub.Set("version", "1.2.0")
+	hub.Set("version", "1.3.0")
 	hub.Set("ready", true)
+	hub.Set("createSha256", safeJsFunc(jsCreateSha256))
+	hub.Set("updateSha256", safeJsFunc(jsUpdateSha256))
+	hub.Set("finalizeSha256", safeJsFunc(jsFinalizeSha256))
 	hub.Set("initSender", safeJsFunc(jsInitSender))
+	hub.Set("initStreamingSender", safeJsFunc(jsInitStreamingSender))
+	hub.Set("feedSenderChunk", safeJsFunc(jsFeedSenderChunk))
+	hub.Set("getSenderBufferLevel", safeJsFunc(jsGetSenderBufferLevel))
 	hub.Set("nextSenderFrame", safeJsFunc(jsNextSenderFrame))
 	hub.Set("getSenderStats", safeJsFunc(jsGetSenderStats))
 	hub.Set("initReceiver", safeJsFunc(jsInitReceiver))
@@ -77,6 +91,209 @@ func main() {
 
 	// Keep WebAssembly event loop running
 	select {}
+}
+
+func jsCreateSha256(this js.Value, args []js.Value) any {
+	hasherMu.Lock()
+	defer hasherMu.Unlock()
+	hasherSeq++
+	id := hasherSeq
+	hasherPool[id] = sha256.New()
+	return id
+}
+
+func jsUpdateSha256(this js.Value, args []js.Value) any {
+	if len(args) < 2 {
+		return jsError("updateSha256 requires id and chunk")
+	}
+	id := args[0].Int()
+	jsChunk := args[1]
+	chunkLen := jsChunk.Get("length").Int()
+	if chunkLen == 0 {
+		return nil
+	}
+	buf := make([]byte, chunkLen)
+	js.CopyBytesToGo(buf, jsChunk)
+
+	hasherMu.Lock()
+	h, ok := hasherPool[id]
+	hasherMu.Unlock()
+	if !ok {
+		return jsError("invalid hasher id")
+	}
+	h.Write(buf)
+	return nil
+}
+
+func jsFinalizeSha256(this js.Value, args []js.Value) any {
+	if len(args) < 1 {
+		return jsError("finalizeSha256 requires id")
+	}
+	id := args[0].Int()
+	hasherMu.Lock()
+	h, ok := hasherPool[id]
+	if ok {
+		delete(hasherPool, id)
+	}
+	hasherMu.Unlock()
+	if !ok {
+		return jsError("invalid hasher id")
+	}
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum)
+}
+
+// jsInitStreamingSender(fileName, fileSize, checksumHex, passphrase, redundancyRatio, windowSize, generationSize)
+func jsInitStreamingSender(this js.Value, args []js.Value) any {
+	if len(args) < 4 {
+		return jsError("initStreamingSender requires fileName, fileSize, checksumHex, and passphrase")
+	}
+
+	fileName := args[0].String()
+	fileSize := uint64(args[1].Float())
+	checksumHex := args[2].String()
+	passphrase := args[3].String()
+
+	redundancy := 0.30
+	if len(args) > 4 && !args[4].IsNull() && !args[4].IsUndefined() {
+		redundancy = args[4].Float()
+	}
+
+	windowSize := 64
+	if len(args) > 5 && !args[5].IsNull() && !args[5].IsUndefined() {
+		windowSize = args[5].Int()
+	}
+
+	genSize := 64
+	if len(args) > 6 && !args[6].IsNull() && !args[6].IsUndefined() {
+		genSize = args[6].Int()
+	}
+
+	if fileSize <= 0 {
+		return jsError("file size must be greater than zero")
+	}
+
+	checksumBytes, err := hex.DecodeString(checksumHex)
+	if err != nil || len(checksumBytes) != 32 {
+		return jsError(fmt.Sprintf("invalid checksum hex: %v", err))
+	}
+	var sum [32]byte
+	copy(sum[:], checksumBytes)
+
+	chunkSize := uint16(badsharing.DefaultChunkSize)
+	totalChunks := (fileSize + uint64(chunkSize) - 1) / uint64(chunkSize)
+
+	meta := &badsharing.FileMetadata{
+		SessionID:      badsharing.GenerateSessionID(),
+		Name:           fileName,
+		Size:           fileSize,
+		Checksum:       sum,
+		ChunkSize:      chunkSize,
+		GenerationSize: uint16(genSize),
+		TotalChunks:    totalChunks,
+	}
+
+	key := badsharing.DeriveKeyFromPassphrase(passphrase)
+
+	cfg := badsharing.SessionConfig{
+		SessionID:       meta.SessionID,
+		SharedKey:       key,
+		WindowSize:      windowSize,
+		GenerationSize:  genSize,
+		RedundancyRatio: redundancy,
+	}
+
+	streamPipe := &bytes.Buffer{}
+	sender, err := badsharing.NewSender(meta, streamPipe, cfg)
+	if err != nil {
+		return jsError(fmt.Sprintf("failed to create streaming sender: %v", err))
+	}
+
+	encMetaBytes, err := meta.MarshalEncrypted(key)
+	if err != nil {
+		return jsError(fmt.Sprintf("failed to seal encrypted metadata: %v", err))
+	}
+
+	rawMetaBytes, err := meta.MarshalBinary()
+	if err != nil {
+		return jsError(fmt.Sprintf("failed to marshal raw metadata: %v", err))
+	}
+
+	stateMu.Lock()
+	if currentSender != nil {
+		currentSender.sender = nil
+		currentSender.meta = nil
+		currentSender.streamPipe = nil
+	}
+	currentSender = &activeSenderState{
+		sender:      sender,
+		meta:        meta,
+		key:         key,
+		streamPipe:  streamPipe,
+		isStreaming: true,
+	}
+	stateMu.Unlock()
+
+	jsEncMeta := js.Global().Get("Uint8Array").New(len(encMetaBytes))
+	js.CopyBytesToJS(jsEncMeta, encMetaBytes)
+
+	jsRawMeta := js.Global().Get("Uint8Array").New(len(rawMetaBytes))
+	js.CopyBytesToJS(jsRawMeta, rawMetaBytes)
+
+	res := js.Global().Get("Object").New()
+	res.Set("success", true)
+	res.Set("sessionID", fmt.Sprintf("%016x", meta.SessionID))
+	res.Set("name", meta.Name)
+	res.Set("size", float64(meta.Size))
+	res.Set("checksum", hex.EncodeToString(meta.Checksum[:]))
+	res.Set("chunkSize", int(meta.ChunkSize))
+	res.Set("generationSize", int(meta.GenerationSize))
+	res.Set("totalGenerations", float64(meta.TotalGenerations()))
+	res.Set("totalChunks", float64(meta.TotalChunks))
+	res.Set("isStreaming", true)
+	res.Set("encryptedMetadata", jsEncMeta)
+	res.Set("rawMetadata", jsRawMeta)
+
+	return res
+}
+
+// jsFeedSenderChunk(chunkUint8Array)
+func jsFeedSenderChunk(this js.Value, args []js.Value) any {
+	if len(args) < 1 {
+		return jsError("feedSenderChunk requires chunk bytes")
+	}
+	stateMu.Lock()
+	s := currentSender
+	stateMu.Unlock()
+
+	if s == nil || s.streamPipe == nil {
+		return jsError("sender is not in streaming mode")
+	}
+
+	jsChunk := args[0]
+	chunkLen := jsChunk.Get("length").Int()
+	if chunkLen > 0 {
+		buf := make([]byte, chunkLen)
+		js.CopyBytesToGo(buf, jsChunk)
+		s.streamPipe.Write(buf)
+	}
+
+	res := js.Global().Get("Object").New()
+	res.Set("success", true)
+	res.Set("bufferLevel", float64(s.streamPipe.Len()))
+	return res
+}
+
+// jsGetSenderBufferLevel() -> number
+func jsGetSenderBufferLevel(this js.Value, args []js.Value) any {
+	stateMu.Lock()
+	s := currentSender
+	stateMu.Unlock()
+
+	if s == nil || s.streamPipe == nil {
+		return 0
+	}
+	return s.streamPipe.Len()
 }
 
 // jsInitSender(fileName, fileBytesUint8Array, passphrase, redundancyRatio, windowSize, generationSize)
@@ -457,6 +674,10 @@ func jsResetSession(this js.Value, args []js.Value) any {
 	if currentSender != nil {
 		currentSender.sender = nil
 		currentSender.meta = nil
+		if currentSender.streamPipe != nil {
+			currentSender.streamPipe.Reset()
+			currentSender.streamPipe = nil
+		}
 		currentSender = nil
 	}
 	if currentRecv != nil {
