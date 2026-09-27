@@ -109,8 +109,12 @@ function generateRandomPassphrase() {
 function updateMagicLink(roomId) {
     if (!roomId) return;
     const passphrase = document.getElementById("sendPassphrase").value || "badhub-secure-swarm-v1";
+    const isRelay = document.getElementById("sendRelayToggle")?.checked || false;
     const baseUrl = window.location.origin + window.location.pathname;
-    const magicUrl = `${baseUrl}#room=${encodeURIComponent(roomId)}&key=${encodeURIComponent(passphrase)}`;
+    let magicUrl = `${baseUrl}#room=${encodeURIComponent(roomId)}&key=${encodeURIComponent(passphrase)}`;
+    if (isRelay) {
+        magicUrl += "&relay=1";
+    }
 
     const txt = document.getElementById("txtMagicLink");
     if (txt) txt.value = magicUrl;
@@ -212,16 +216,111 @@ function switchRecvTransport(mode) {
     }
 }
 
-const peerIceConfig = {
-    config: {
-        iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-            { urls: "stun:stun2.l.google.com:19302" }
-        ]
-    },
-    debug: 1
-};
+// ==========================================
+// IP PRIVACY & TURN RELAY CONFIGURATION
+// ==========================================
+
+const DEFAULT_STUN_SERVERS = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" }
+];
+
+const OPENRELAY_SERVERS = [
+    {
+        urls: [
+            "turn:openrelay.metered.ca:80",
+            "turn:openrelay.metered.ca:443",
+            "turn:openrelay.metered.ca:443?transport=tcp",
+            "turns:openrelay.metered.ca:443",
+            "turns:openrelay.metered.ca:443?transport=tcp"
+        ],
+        username: "openrelayproject",
+        credential: "openrelayproject"
+    }
+];
+
+function getEffectiveIceConfig(forSender) {
+    const prefix = forSender ? "send" : "recv";
+    const isRelay = document.getElementById(prefix + "RelayToggle")?.checked || false;
+
+    const customUrl = document.getElementById(prefix + "TurnUrl")?.value.trim();
+    const customUser = document.getElementById(prefix + "TurnUser")?.value.trim();
+    const customPass = document.getElementById(prefix + "TurnPass")?.value.trim();
+
+    let iceServers = [];
+
+    if (customUrl) {
+        const customEntry = { urls: customUrl };
+        if (customUser) customEntry.username = customUser;
+        if (customPass) customEntry.credential = customPass;
+        iceServers.push(customEntry);
+    } else if (isRelay) {
+        iceServers = [...OPENRELAY_SERVERS];
+    } else {
+        iceServers = [...DEFAULT_STUN_SERVERS];
+    }
+
+    const transportPolicy = isRelay ? "relay" : "all";
+
+    return {
+        iceServers: iceServers,
+        iceTransportPolicy: transportPolicy
+    };
+}
+
+function getPeerJsOptions(forSender) {
+    const ice = getEffectiveIceConfig(forSender);
+    return {
+        config: {
+            iceServers: ice.iceServers,
+            iceTransportPolicy: ice.iceTransportPolicy
+        },
+        debug: 1
+    };
+}
+
+function toggleSendRelay(checked) {
+    const badge = document.getElementById("sendPrivacyBadge");
+    if (badge) {
+        if (checked) {
+            badge.innerText = "TURN Relay Active (IPs Masked)";
+            badge.className = "privacy-badge badge-relay";
+        } else {
+            badge.innerText = "Direct P2P (IP Visible)";
+            badge.className = "privacy-badge badge-direct";
+        }
+    }
+
+    if (currentRoomId) {
+        updateMagicLink(currentRoomId);
+        if (selectedFileData && document.querySelector('input[name="sendTransport"]:checked')?.value === "magic") {
+            armSenderRoom(currentRoomId);
+        }
+    }
+}
+
+function toggleRecvRelay(checked) {
+    const badge = document.getElementById("recvPrivacyBadge");
+    if (badge) {
+        if (checked) {
+            badge.innerText = "TURN Relay Active (IPs Masked)";
+            badge.className = "privacy-badge badge-relay";
+        } else {
+            badge.innerText = "Direct P2P (IP Visible)";
+            badge.className = "privacy-badge badge-direct";
+        }
+    }
+}
+
+function onCustomTurnChange(prefix) {
+    const isSender = (prefix === "send");
+    if (isSender) {
+        if (currentRoomId && selectedFileData) {
+            armSenderRoom(currentRoomId);
+        }
+    }
+}
 
 // Automated PeerJS Sender Room Arming
 function armSenderRoom(roomId) {
@@ -240,7 +339,8 @@ function armSenderRoom(roomId) {
     if (statusText) statusText.innerText = `Arming room ${roomId}...`;
 
     try {
-        senderPeer = new Peer(roomId, peerIceConfig);
+        const peerOptions = getPeerJsOptions(true);
+        senderPeer = new Peer(roomId, peerOptions);
 
         senderPeer.on("open", (id) => {
             if (statusDot) statusDot.className = "status-dot loading";
@@ -307,7 +407,8 @@ function connectToRoom(roomId) {
     if (statusText) statusText.innerText = `Connecting to room ${roomId}...`;
 
     try {
-        receiverPeer = new Peer(peerIceConfig);
+        const peerOptions = getPeerJsOptions(false);
+        receiverPeer = new Peer(peerOptions);
 
         receiverPeer.on("open", () => {
             const conn = receiverPeer.connect(roomId, {
@@ -352,6 +453,15 @@ function checkUrlHash() {
     const params = new URLSearchParams(rawHash);
     const room = params.get("room");
     const key = params.get("key");
+    const relay = params.get("relay");
+
+    if (relay === "1") {
+        const recvToggle = document.getElementById("recvRelayToggle");
+        if (recvToggle) {
+            recvToggle.checked = true;
+            toggleRecvRelay(true);
+        }
+    }
 
     if (room) {
         switchTab("recv");
@@ -713,13 +823,8 @@ function triggerDownload() {
 // WEBRTC SIGNALING (SERVERLESS MANUAL SDP)
 // ==========================================
 
-const rtcConfig = {
-    iceServers: [
-        { urls: "stun:stun.l.google.com:19302" }
-    ]
-};
-
 async function generateWebRTCOffer() {
+    const rtcConfig = getEffectiveIceConfig(true);
     activePeerConnection = new RTCPeerConnection(rtcConfig);
     activeDataChannel = activePeerConnection.createDataChannel("badhub_channel", {
         ordered: false,
@@ -767,6 +872,7 @@ async function generateWebRTCAnswer() {
 
     try {
         const offer = JSON.parse(atob(rawOffer));
+        const rtcConfig = getEffectiveIceConfig(false);
         activePeerConnection = new RTCPeerConnection(rtcConfig);
 
         activePeerConnection.ondatachannel = e => {

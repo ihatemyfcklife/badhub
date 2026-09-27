@@ -691,6 +691,147 @@ body {
     background: var(--accent-red);
 }
 
+/* Privacy & TURN Relay Box */
+.privacy-box {
+    margin-top: 14px;
+    background: rgba(18, 24, 38, 0.7);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.privacy-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+/* Custom Cyberpunk Toggle Switch */
+.toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.toggle-label input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: relative;
+    width: 40px;
+    height: 22px;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    transition: all 0.25s ease;
+    flex-shrink: 0;
+}
+
+.toggle-slider::before {
+    content: "";
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    left: 3px;
+    top: 3px;
+    background-color: var(--text-muted);
+    border-radius: 50%;
+    transition: all 0.25s ease;
+}
+
+.toggle-label input:checked + .toggle-slider {
+    background-color: rgba(0, 255, 163, 0.2);
+    border-color: var(--accent-green);
+    box-shadow: 0 0 10px var(--accent-green-glow);
+}
+
+.toggle-label input:checked + .toggle-slider::before {
+    transform: translateX(18px);
+    background-color: var(--accent-green);
+}
+
+.toggle-text {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.privacy-badge {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    transition: all 0.2s ease;
+}
+
+.privacy-badge.badge-direct {
+    color: var(--text-muted);
+    border-color: var(--border-color);
+}
+
+.privacy-badge.badge-relay {
+    color: var(--accent-green);
+    border-color: var(--accent-green);
+    background: rgba(0, 255, 163, 0.1);
+    box-shadow: 0 0 8px var(--accent-green-glow);
+}
+
+.privacy-hint {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+/* Custom TURN Drawer */
+.custom-turn-drawer {
+    margin-top: 4px;
+    font-size: 0.85rem;
+}
+
+.custom-turn-drawer summary {
+    cursor: pointer;
+    color: var(--accent-cyan);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    outline: none;
+    user-select: none;
+    transition: color 0.2s;
+}
+
+.custom-turn-drawer summary:hover {
+    color: var(--text-primary);
+}
+
+.custom-turn-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 10px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border-color);
+}
+
+@media (max-width: 640px) {
+    .custom-turn-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* Utilities */
 .hidden {
     display: none !important;

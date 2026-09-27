@@ -75,6 +75,36 @@
                     </label>
                 </div>
 
+                <!-- Sender IP Privacy & TURN Relay Box -->
+                <div class="privacy-box">
+                    <div class="privacy-header">
+                        <label class="toggle-label" for="sendRelayToggle">
+                            <input type="checkbox" id="sendRelayToggle" onchange="toggleSendRelay(this.checked)">
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-text">Hide IP Address (TURN Relay Mode)</span>
+                        </label>
+                        <span class="privacy-badge badge-direct" id="sendPrivacyBadge">Direct P2P (IP Visible)</span>
+                    </div>
+                    <p class="privacy-hint">Forces traffic through a zero-knowledge TURN relay so peers never learn each other's IP addresses.</p>
+                    <details class="custom-turn-drawer" id="sendCustomTurnDrawer">
+                        <summary>Custom TURN Server (Optional)</summary>
+                        <div class="custom-turn-grid">
+                            <div class="form-group">
+                                <label for="sendTurnUrl">TURN Server (URL)</label>
+                                <input type="text" id="sendTurnUrl" class="input-text font-mono" placeholder="turn:openrelay.metered.ca:80" oninput="onCustomTurnChange('send')">
+                            </div>
+                            <div class="form-group">
+                                <label for="sendTurnUser">Username</label>
+                                <input type="text" id="sendTurnUser" class="input-text font-mono" placeholder="openrelayproject" oninput="onCustomTurnChange('send')">
+                            </div>
+                            <div class="form-group">
+                                <label for="sendTurnPass">Credential</label>
+                                <input type="password" id="sendTurnPass" class="input-text font-mono" placeholder="openrelayproject" oninput="onCustomTurnChange('send')">
+                            </div>
+                        </div>
+                    </details>
+                </div>
+
                 <!-- Magic Link & QR Code Box for Sender -->
                 <div id="sendMagicBox" class="magic-box">
                     <div class="share-box">
@@ -189,6 +219,36 @@
                             </label>
                         </div>
                     </div>
+                </div>
+
+                <!-- Receiver IP Privacy & TURN Relay Box -->
+                <div class="privacy-box">
+                    <div class="privacy-header">
+                        <label class="toggle-label" for="recvRelayToggle">
+                            <input type="checkbox" id="recvRelayToggle" onchange="toggleRecvRelay(this.checked)">
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-text">Hide IP Address (TURN Relay Mode)</span>
+                        </label>
+                        <span class="privacy-badge badge-direct" id="recvPrivacyBadge">Direct P2P (IP Visible)</span>
+                    </div>
+                    <p class="privacy-hint">Forces traffic through a zero-knowledge TURN relay so peers never learn each other's IP addresses.</p>
+                    <details class="custom-turn-drawer" id="recvCustomTurnDrawer">
+                        <summary>Custom TURN Server (Optional)</summary>
+                        <div class="custom-turn-grid">
+                            <div class="form-group">
+                                <label for="recvTurnUrl">TURN Server (URL)</label>
+                                <input type="text" id="recvTurnUrl" class="input-text font-mono" placeholder="turn:openrelay.metered.ca:80" oninput="onCustomTurnChange('recv')">
+                            </div>
+                            <div class="form-group">
+                                <label for="recvTurnUser">Username</label>
+                                <input type="text" id="recvTurnUser" class="input-text font-mono" placeholder="openrelayproject" oninput="onCustomTurnChange('recv')">
+                            </div>
+                            <div class="form-group">
+                                <label for="recvTurnPass">Credential</label>
+                                <input type="password" id="recvTurnPass" class="input-text font-mono" placeholder="openrelayproject" oninput="onCustomTurnChange('recv')">
+                            </div>
+                        </div>
+                    </details>
                 </div>
 
                 <!-- Magic Connect Box for Receiver -->
