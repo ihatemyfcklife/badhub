@@ -18,17 +18,32 @@ type activeSenderState struct {
 	key    [32]byte
 }
 
+type jsChunkWriter struct {
+	callback js.Value
+}
+
+func (w *jsChunkWriter) Write(p []byte) (n int, err error) {
+	if !w.callback.IsUndefined() && !w.callback.IsNull() {
+		jsArr := js.Global().Get("Uint8Array").New(len(p))
+		js.CopyBytesToJS(jsArr, p)
+		w.callback.Invoke(jsArr)
+	}
+	return len(p), nil
+}
+
 type activeReceiverState struct {
-	receiver *badsharing.Receiver
-	meta     *badsharing.FileMetadata
-	destBuf  *bytes.Buffer
-	key      [32]byte
+	receiver    *badsharing.Receiver
+	meta        *badsharing.FileMetadata
+	destBuf     *bytes.Buffer
+	chunkWriter *jsChunkWriter
+	isStreaming bool
+	key         [32]byte
 }
 
 var (
-	stateMu        sync.Mutex
-	currentSender  *activeSenderState
-	currentRecv    *activeReceiverState
+	stateMu       sync.Mutex
+	currentSender *activeSenderState
+	currentRecv   *activeReceiverState
 )
 
 func safeJsFunc(fn func(this js.Value, args []js.Value) any) js.Func {
@@ -45,13 +60,15 @@ func safeJsFunc(fn func(this js.Value, args []js.Value) any) js.Func {
 func main() {
 	hub := js.Global().Get("Object").New()
 
-	hub.Set("version", "1.0.0")
+	hub.Set("version", "1.2.0")
 	hub.Set("ready", true)
 	hub.Set("initSender", safeJsFunc(jsInitSender))
 	hub.Set("nextSenderFrame", safeJsFunc(jsNextSenderFrame))
 	hub.Set("getSenderStats", safeJsFunc(jsGetSenderStats))
 	hub.Set("initReceiver", safeJsFunc(jsInitReceiver))
 	hub.Set("ingestReceiverFrame", safeJsFunc(jsIngestReceiverFrame))
+	hub.Set("recodeReceiverFrame", safeJsFunc(jsRecodeReceiverFrame))
+	hub.Set("getReceiverStats", safeJsFunc(jsGetReceiverStats))
 	hub.Set("finalizeReceiver", safeJsFunc(jsFinalizeReceiver))
 	hub.Set("resetSession", safeJsFunc(jsResetSession))
 	hub.Set("deriveKeyHex", safeJsFunc(jsDeriveKeyHex))
@@ -62,7 +79,7 @@ func main() {
 	select {}
 }
 
-// jsInitSender(fileName, fileBytesUint8Array, passphrase, redundancyRatio, windowSize)
+// jsInitSender(fileName, fileBytesUint8Array, passphrase, redundancyRatio, windowSize, generationSize)
 func jsInitSender(this js.Value, args []js.Value) any {
 	if len(args) < 3 {
 		return jsError("initSender requires fileName, fileBytes, and passphrase")
@@ -77,9 +94,14 @@ func jsInitSender(this js.Value, args []js.Value) any {
 		redundancy = args[3].Float()
 	}
 
-	windowSize := 32
+	windowSize := 64
 	if len(args) > 4 && !args[4].IsNull() && !args[4].IsUndefined() {
 		windowSize = args[4].Int()
+	}
+
+	genSize := 64
+	if len(args) > 5 && !args[5].IsNull() && !args[5].IsUndefined() {
+		genSize = args[5].Int()
 	}
 
 	fileLen := jsBytes.Get("length").Int()
@@ -93,6 +115,9 @@ func jsInitSender(this js.Value, args []js.Value) any {
 	if err != nil {
 		return jsError(fmt.Sprintf("failed to create metadata: %v", err))
 	}
+	if genSize > 0 {
+		meta.GenerationSize = uint16(genSize)
+	}
 
 	key := badsharing.DeriveKeyFromPassphrase(passphrase)
 
@@ -100,6 +125,7 @@ func jsInitSender(this js.Value, args []js.Value) any {
 		SessionID:       meta.SessionID,
 		SharedKey:       key,
 		WindowSize:      windowSize,
+		GenerationSize:  genSize,
 		RedundancyRatio: redundancy,
 	}
 
@@ -143,6 +169,8 @@ func jsInitSender(this js.Value, args []js.Value) any {
 	res.Set("size", float64(meta.Size))
 	res.Set("checksum", hex.EncodeToString(meta.Checksum[:]))
 	res.Set("chunkSize", int(meta.ChunkSize))
+	res.Set("generationSize", int(meta.GenerationSize))
+	res.Set("totalGenerations", float64(meta.TotalGenerations()))
 	res.Set("totalChunks", float64(meta.TotalChunks))
 	res.Set("encryptedMetadata", jsEncMeta)
 	res.Set("rawMetadata", jsRawMeta)
@@ -150,7 +178,7 @@ func jsInitSender(this js.Value, args []js.Value) any {
 	return res
 }
 
-// jsNextSenderFrame() -> { frame: Uint8Array, eof: bool, error: string }
+// jsNextSenderFrame() -> { frame: Uint8Array, eof: bool, currentGen: number, error: string }
 func jsNextSenderFrame(this js.Value, args []js.Value) any {
 	stateMu.Lock()
 	s := currentSender
@@ -167,6 +195,7 @@ func jsNextSenderFrame(this js.Value, args []js.Value) any {
 
 	res := js.Global().Get("Object").New()
 	res.Set("eof", eof)
+	res.Set("currentGeneration", float64(s.sender.CurrentGeneration()))
 
 	if frame != nil {
 		jsFrame := js.Global().Get("Uint8Array").New(len(frame))
@@ -179,7 +208,7 @@ func jsNextSenderFrame(this js.Value, args []js.Value) any {
 	return res
 }
 
-// jsGetSenderStats() -> { dataPackets: number, parityPackets: number }
+// jsGetSenderStats() -> { dataPackets: number, parityPackets: number, currentGeneration: number }
 func jsGetSenderStats(this js.Value, args []js.Value) any {
 	stateMu.Lock()
 	s := currentSender
@@ -193,10 +222,11 @@ func jsGetSenderStats(this js.Value, args []js.Value) any {
 	res := js.Global().Get("Object").New()
 	res.Set("dataPackets", float64(dataPackets))
 	res.Set("parityPackets", float64(parityPackets))
+	res.Set("currentGeneration", float64(s.sender.CurrentGeneration()))
 	return res
 }
 
-// jsInitReceiver(metadataUint8Array, passphrase) -> { name, size, checksum, totalChunks, sessionID }
+// jsInitReceiver(metadataUint8Array, passphrase, onChunkDecodedCallback?)
 func jsInitReceiver(this js.Value, args []js.Value) any {
 	if len(args) < 2 {
 		return jsError("initReceiver requires metadataBytes and passphrase")
@@ -228,14 +258,33 @@ func jsInitReceiver(this js.Value, args []js.Value) any {
 		return jsError("invalid metadata header format")
 	}
 
-	destBuf := &bytes.Buffer{}
 	cfg := badsharing.SessionConfig{
-		SessionID:  meta.SessionID,
-		SharedKey:  key,
-		WindowSize: 32,
+		SessionID:      meta.SessionID,
+		SharedKey:      key,
+		WindowSize:     int(meta.GenerationSize),
+		GenerationSize: int(meta.GenerationSize),
 	}
 
-	receiver, err := badsharing.NewReceiver(&meta, destBuf, cfg)
+	var destBuf *bytes.Buffer
+	var chunkWriter *jsChunkWriter
+	isStreaming := false
+
+	// Check if a streaming callback function is supplied
+	if len(args) >= 3 && args[2].Type() == js.TypeFunction {
+		chunkWriter = &jsChunkWriter{callback: args[2]}
+		isStreaming = true
+	} else {
+		destBuf = &bytes.Buffer{}
+	}
+
+	var receiver *badsharing.Receiver
+	var err error
+	if isStreaming {
+		receiver, err = badsharing.NewReceiver(&meta, chunkWriter, cfg)
+	} else {
+		receiver, err = badsharing.NewReceiver(&meta, destBuf, cfg)
+	}
+
 	if err != nil {
 		return jsError(fmt.Sprintf("failed to initialize receiver: %v", err))
 	}
@@ -250,10 +299,12 @@ func jsInitReceiver(this js.Value, args []js.Value) any {
 		currentRecv.meta = nil
 	}
 	currentRecv = &activeReceiverState{
-		receiver: receiver,
-		meta:     &meta,
-		destBuf:  destBuf,
-		key:      key,
+		receiver:    receiver,
+		meta:        &meta,
+		destBuf:     destBuf,
+		chunkWriter: chunkWriter,
+		isStreaming: isStreaming,
+		key:         key,
 	}
 	stateMu.Unlock()
 
@@ -263,12 +314,16 @@ func jsInitReceiver(this js.Value, args []js.Value) any {
 	res.Set("name", meta.Name)
 	res.Set("size", float64(meta.Size))
 	res.Set("checksum", hex.EncodeToString(meta.Checksum[:]))
+	res.Set("chunkSize", int(meta.ChunkSize))
+	res.Set("generationSize", int(meta.GenerationSize))
+	res.Set("totalGenerations", float64(meta.TotalGenerations()))
 	res.Set("totalChunks", float64(meta.TotalChunks))
+	res.Set("isStreaming", isStreaming)
 
 	return res
 }
 
-// jsIngestReceiverFrame(frameUint8Array) -> { completed, bytesReceived, totalBytes, percent, framesReceived, framesDropped }
+// jsIngestReceiverFrame(frameUint8Array) -> { completed, bytesReceived, totalBytes, percent, framesReceived, framesDropped, currentGeneration }
 func jsIngestReceiverFrame(this js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return jsError("ingestReceiverFrame requires frame bytes")
@@ -293,6 +348,8 @@ func jsIngestReceiverFrame(this js.Value, args []js.Value) any {
 	completed, err := r.receiver.IngestFrame(frame)
 	rxFrames, dropFrames := r.receiver.Stats()
 	bytesReceived, totalBytes, percent := r.receiver.Progress()
+	currGen := r.receiver.CurrentGeneration()
+	recoded := r.receiver.FramesRecoded()
 
 	res := js.Global().Get("Object").New()
 	res.Set("completed", completed)
@@ -301,6 +358,8 @@ func jsIngestReceiverFrame(this js.Value, args []js.Value) any {
 	res.Set("percent", percent)
 	res.Set("framesReceived", float64(rxFrames))
 	res.Set("framesDropped", float64(dropFrames))
+	res.Set("framesRecoded", float64(recoded))
+	res.Set("currentGeneration", float64(currGen))
 
 	if err != nil {
 		res.Set("error", err.Error())
@@ -311,7 +370,54 @@ func jsIngestReceiverFrame(this js.Value, args []js.Value) any {
 	return res
 }
 
-// jsFinalizeReceiver() -> { success: bool, data: Uint8Array, name: string, size: number, checksum: string }
+// jsRecodeReceiverFrame() -> { success: bool, frame: Uint8Array, error: string }
+func jsRecodeReceiverFrame(this js.Value, args []js.Value) any {
+	stateMu.Lock()
+	r := currentRecv
+	stateMu.Unlock()
+
+	if r == nil || r.receiver == nil {
+		return jsError("receiver is not initialized")
+	}
+
+	frame, err := r.receiver.RecodeFrame()
+	if err != nil {
+		return jsError(fmt.Sprintf("recode failed: %v", err))
+	}
+
+	jsFrame := js.Global().Get("Uint8Array").New(len(frame))
+	js.CopyBytesToJS(jsFrame, frame)
+
+	res := js.Global().Get("Object").New()
+	res.Set("success", true)
+	res.Set("frame", jsFrame)
+	return res
+}
+
+// jsGetReceiverStats() -> { framesReceived, framesDropped, framesRecoded, currentGeneration }
+func jsGetReceiverStats(this js.Value, args []js.Value) any {
+	stateMu.Lock()
+	r := currentRecv
+	stateMu.Unlock()
+
+	if r == nil || r.receiver == nil {
+		return jsError("receiver is not initialized")
+	}
+
+	rx, dropped := r.receiver.Stats()
+	recoded := r.receiver.FramesRecoded()
+	currGen := r.receiver.CurrentGeneration()
+
+	res := js.Global().Get("Object").New()
+	res.Set("success", true)
+	res.Set("framesReceived", float64(rx))
+	res.Set("framesDropped", float64(dropped))
+	res.Set("framesRecoded", float64(recoded))
+	res.Set("currentGeneration", float64(currGen))
+	return res
+}
+
+// jsFinalizeReceiver() -> { success: bool, data: Uint8Array|null, name: string, size: number, checksum: string, isStreaming: bool }
 func jsFinalizeReceiver(this js.Value, args []js.Value) any {
 	stateMu.Lock()
 	r := currentRecv
@@ -325,19 +431,22 @@ func jsFinalizeReceiver(this js.Value, args []js.Value) any {
 		return jsError(fmt.Sprintf("file verification failed: %v", err))
 	}
 
-	fileBytes := r.destBuf.Bytes()
-	jsFile := js.Global().Get("Uint8Array").New(len(fileBytes))
-	js.CopyBytesToJS(jsFile, fileBytes)
-
 	res := js.Global().Get("Object").New()
 	res.Set("success", true)
 	res.Set("name", r.meta.Name)
 	res.Set("size", float64(r.meta.Size))
 	res.Set("checksum", hex.EncodeToString(r.meta.Checksum[:]))
-	res.Set("data", jsFile)
+	res.Set("isStreaming", r.isStreaming)
 
-	// Release internal buffer memory to let GC collect
-	r.destBuf.Reset()
+	if !r.isStreaming && r.destBuf != nil {
+		fileBytes := r.destBuf.Bytes()
+		jsFile := js.Global().Get("Uint8Array").New(len(fileBytes))
+		js.CopyBytesToJS(jsFile, fileBytes)
+		res.Set("data", jsFile)
+		r.destBuf.Reset()
+	} else {
+		res.Set("data", js.Null())
+	}
 
 	return res
 }

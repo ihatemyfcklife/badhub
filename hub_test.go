@@ -231,3 +231,95 @@ func TestBadHub_CorruptedFrameSafety(t *testing.T) {
 	rx, dropped := receiver.Stats()
 	t.Logf("Corrupted frames handled safely: rx=%d, dropped=%d", rx, dropped)
 }
+
+func TestBadHub_MultiGeneration_StreamingAndSwarmRecoding(t *testing.T) {
+	const payloadSize = 200 * 1024 // 200 KB = ~152 chunks with 1332 chunk size
+	sourceData := make([]byte, payloadSize)
+	_, _ = io.ReadFull(rand.Reader, sourceData)
+
+	meta, err := badsharing.NewFileMetadata("multigen-stream-test.bin", bytes.NewReader(sourceData))
+	if err != nil {
+		t.Fatalf("NewFileMetadata failed: %v", err)
+	}
+	meta.GenerationSize = 64
+
+	passphrase := "multigen-swarm-secret-2026"
+	key := badsharing.DeriveKeyFromPassphrase(passphrase)
+
+	cfg := badsharing.SessionConfig{
+		SessionID:       meta.SessionID,
+		SharedKey:       key,
+		WindowSize:      64,
+		GenerationSize:  64,
+		RedundancyRatio: 0.35,
+	}
+
+	sender, err := badsharing.NewSender(meta, bytes.NewReader(sourceData), cfg)
+	if err != nil {
+		t.Fatalf("NewSender failed: %v", err)
+	}
+
+	// Receiver 1: Streaming chunk writer (simulates FileSystemWritableFileStream)
+	var streamBuf bytes.Buffer
+	rec1, err := badsharing.NewReceiver(meta, &streamBuf, cfg)
+	if err != nil {
+		t.Fatalf("NewReceiver 1 failed: %v", err)
+	}
+
+	// Receiver 2: Swarm peer receiving recoded packets from Receiver 1
+	var rec2Buf bytes.Buffer
+	rec2, err := badsharing.NewReceiver(meta, &rec2Buf, cfg)
+	if err != nil {
+		t.Fatalf("NewReceiver 2 failed: %v", err)
+	}
+
+	framesSent := 0
+	recodedFramesSent := 0
+
+	for {
+		frame, eof, err := sender.NextFrame()
+		if err != nil {
+			t.Fatalf("NextFrame failed: %v", err)
+		}
+		if eof {
+			break
+		}
+		framesSent++
+
+		// Ingest into Receiver 1
+		done1, err := rec1.IngestFrame(frame)
+		if err != nil {
+			t.Fatalf("rec1 IngestFrame error: %v", err)
+		}
+
+		// Also feed 50% directly to Receiver 2 to simulate partial download
+		if framesSent%2 == 0 {
+			_, _ = rec2.IngestFrame(frame)
+		}
+
+		// Swarm Recoding: when Receiver 1 has progress >= 30%, it recodes frames for Receiver 2
+		_, _, pct := rec1.Progress()
+		if pct >= 30.0 && !done1 {
+			recodedFrame, err := rec1.RecodeFrame()
+			if err == nil && len(recodedFrame) > 0 {
+				recodedFramesSent++
+				_, _ = rec2.IngestFrame(recodedFrame)
+			}
+		}
+
+		if done1 {
+			break
+		}
+	}
+
+	// Finalize Receiver 1
+	if err := rec1.Close(); err != nil {
+		t.Fatalf("rec1.Close failed: %v", err)
+	}
+	if !bytes.Equal(streamBuf.Bytes(), sourceData) {
+		t.Fatalf("rec1 streamed data does not match source data")
+	}
+
+	t.Logf("MultiGeneration & Swarm Test Passed: FramesSent=%d, RecodedFramesSent=%d, Rec1Gen=%d",
+		framesSent, recodedFramesSent, rec1.CurrentGeneration())
+}

@@ -259,6 +259,29 @@
                     </details>
                 </div>
 
+                <!-- Direct-to-Disk Stream & Swarm Seeding Controls -->
+                <div class="privacy-box">
+                    <div class="privacy-header">
+                        <label class="toggle-label" for="recvDirectDiskToggle">
+                            <input type="checkbox" id="recvDirectDiskToggle" onchange="toggleDirectDisk(this.checked)">
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-text">Direct-to-Disk Stream (0 RAM, >2 GB Support)</span>
+                        </label>
+                        <span class="privacy-badge badge-direct" id="recvDiskBadge">Streams API</span>
+                    </div>
+                    <p class="privacy-hint">Streams decoded blocks directly to disk via FileSystemWritableFileStream, eliminating browser RAM limits for multi-gigabyte transfers.</p>
+
+                    <div class="privacy-header" style="margin-top: 10px;">
+                        <label class="toggle-label" for="recvSwarmSeedToggle">
+                            <input type="checkbox" id="recvSwarmSeedToggle" onchange="toggleSwarmSeed(this.checked)" checked>
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-text">P2P Swarm Seeding (Recode at 30% Progress)</span>
+                        </label>
+                        <span class="privacy-badge badge-turn" id="recvSwarmBadge">Swarm Active</span>
+                    </div>
+                    <p class="privacy-hint">Turns your browser into an active RLNC seeder, recoding partial packets to accelerate downloads for other swarm peers.</p>
+                </div>
+
                 <!-- Magic Connect Box for Receiver -->
                 <div id="recvMagicBox" class="magic-box">
                     <div class="share-box">
@@ -298,6 +321,15 @@
                 <div class="progress-bar-container">
                     <div class="progress-bar" id="recvProgressBar" style="width: 0%;"></div>
                 </div>
+
+                <!-- Direct-to-Disk Destination Prompt -->
+                <div id="recvDiskPrompt" class="share-box hidden" style="margin-bottom: 1.5rem; border-color: var(--accent-cyan);">
+                    <div style="margin-bottom: 0.75rem;">
+                        <span class="privacy-badge badge-turn" style="margin-bottom: 0.5rem; display: inline-block;">Direct-to-Disk Streaming</span>
+                        <p class="desc" id="recvDiskPromptText" style="margin-bottom: 0;">Incoming stream detected. Select a destination file on your drive to stream directly to disk without RAM limits.</p>
+                    </div>
+                    <button class="btn btn-primary" id="btnConfirmDiskDest" onclick="confirmDiskDestination()">Choose Save Location on Disk</button>
+                </div>
                 <div class="metrics-grid">
                     <div class="metric-item">
                         <span class="metric-label">Status</span>
@@ -312,8 +344,16 @@
                         <span class="metric-value" id="recvMetricPercent">0.0%</span>
                     </div>
                     <div class="metric-item">
+                        <span class="metric-label">Batch / Generation</span>
+                        <span class="metric-value" id="recvMetricGen">Gen 0 / 1</span>
+                    </div>
+                    <div class="metric-item">
                         <span class="metric-label">Frames Processed</span>
                         <span class="metric-value" id="recvMetricFrames">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">P2P Swarm Recoded</span>
+                        <span class="metric-value" id="recvMetricRecoded">0 frames</span>
                     </div>
                     <div class="metric-item">
                         <span class="metric-label">Corrupt / Rejected</span>

@@ -15,6 +15,17 @@ let activeDataChannel = null;
 let receivedFileBlob = null;
 let receivedFileName = "";
 
+// Direct-to-Disk & P2P Swarm State
+let directDiskEnabled = false;
+let swarmSeedEnabled = true;
+let diskFileHandle = null;
+let diskWritableStream = null;
+let diskWriteChain = Promise.resolve();
+let pendingMetaBytes = null;
+let pendingMetaInfo = null;
+let currentReceiverMeta = null;
+let receiverNostrPrivKey = null;
+
 // Initialize WebAssembly Engine
 async function initWasm() {
     const statusDot = document.getElementById("statusDot");
@@ -347,6 +358,68 @@ function toggleRecvRelay(checked) {
         } else {
             badge.innerText = "Direct P2P (IP Visible)";
             badge.className = "privacy-badge badge-direct";
+        }
+    }
+}
+
+function toggleDirectDisk(checked) {
+    directDiskEnabled = checked;
+    const badge = document.getElementById("recvDiskBadge");
+    if (!badge) return;
+    if (checked) {
+        if (typeof window.showSaveFilePicker === "function") {
+            badge.innerText = "Streams API Active";
+            badge.className = "privacy-badge badge-turn";
+        } else {
+            badge.innerText = "Not Supported (Memory Mode)";
+            badge.className = "privacy-badge badge-direct";
+            alert("File System Access API (showSaveFilePicker) is not supported in this browser. Falling back to RAM buffer mode.");
+            document.getElementById("recvDirectDiskToggle").checked = false;
+            directDiskEnabled = false;
+        }
+    } else {
+        badge.innerText = "RAM Buffer Mode";
+        badge.className = "privacy-badge badge-direct";
+        const prompt = document.getElementById("recvDiskPrompt");
+        if (prompt) prompt.classList.add("hidden");
+    }
+}
+
+function toggleSwarmSeed(checked) {
+    swarmSeedEnabled = checked;
+    const badge = document.getElementById("recvSwarmBadge");
+    if (!badge) return;
+    if (checked) {
+        badge.innerText = "Swarm Active";
+        badge.className = "privacy-badge badge-turn";
+    } else {
+        badge.innerText = "Seeding Disabled";
+        badge.className = "privacy-badge badge-direct";
+    }
+}
+
+async function confirmDiskDestination() {
+    if (!pendingMetaBytes || !window.BadHub) return;
+    try {
+        const suggestedName = pendingMetaInfo ? pendingMetaInfo.name : "download.bin";
+        diskFileHandle = await window.showSaveFilePicker({ suggestedName });
+        diskWritableStream = await diskFileHandle.createWritable();
+        diskWriteChain = Promise.resolve();
+
+        const promptBox = document.getElementById("recvDiskPrompt");
+        if (promptBox) promptBox.classList.add("hidden");
+
+        const badge = document.getElementById("recvDiskBadge");
+        if (badge) {
+            badge.innerText = "Streaming to Disk";
+            badge.className = "privacy-badge badge-turn";
+        }
+
+        const passphrase = document.getElementById("recvPassphrase").value || "badhub-secure-swarm-v1";
+        setupReceiver(pendingMetaBytes, passphrase);
+    } catch (e) {
+        if (e.name !== "AbortError") {
+            console.error("showSaveFilePicker error:", e);
         }
     }
 }
@@ -782,7 +855,7 @@ async function startSending() {
     statusEl.innerText = "Initializing RLNC Engine...";
 
     // 1. Initialize Sender in Go WASM
-    const res = window.BadHub.initSender(selectedFile.name, selectedFileData, passphrase, redundancy, 32);
+    const res = window.BadHub.initSender(selectedFile.name, selectedFileData, passphrase, redundancy, 64, 64);
     if (!res.success) {
         alert("Failed to initialize sender: " + res.error);
         stopTransmission();
@@ -912,6 +985,8 @@ async function startSending() {
                     speedEl.innerText = mbps.toFixed(2) + " MB/s";
                 }
 
+                statusEl.innerText = `Streaming Encrypted Shards (Gen ${stats.currentGeneration + 1} / ${res.totalGenerations})...`;
+
                 const pct = Math.min(99.0, (stats.dataPackets / res.totalChunks) * 100.0);
                 progressBar.style.width = pct.toFixed(1) + "%";
                 percentEl.innerText = pct.toFixed(1) + "%";
@@ -948,13 +1023,96 @@ function stopTransmission() {
 // P2P RECEIVER IMPLEMENTATION
 // ==========================================
 
+let receiverInitialized = false;
+
+function setupReceiver(bytes, passphrase) {
+    const fileEl = document.getElementById("recvMetricFile");
+    const statusEl = document.getElementById("recvMetricStatus");
+
+    let initRes;
+    if (directDiskEnabled && diskWritableStream) {
+        const onChunkDecoded = (chunk) => {
+            diskWriteChain = diskWriteChain.then(() => diskWritableStream.write(chunk));
+        };
+        initRes = window.BadHub.initReceiver(bytes, passphrase, onChunkDecoded);
+    } else {
+        initRes = window.BadHub.initReceiver(bytes, passphrase);
+    }
+
+    if (initRes && initRes.success) {
+        receiverInitialized = true;
+        currentReceiverMeta = initRes;
+        fileEl.innerText = `${initRes.name} (${formatBytes(initRes.size)})`;
+        const genEl = document.getElementById("recvMetricGen");
+        if (genEl) genEl.innerText = `Gen 1 / ${initRes.totalGenerations}`;
+        statusEl.innerText = initRes.isStreaming
+            ? "Direct-to-Disk Stream active (0 RAM). Receiving shards..."
+            : "Metadata validated. Receiving shards...";
+        return true;
+    } else {
+        statusEl.innerText = "Receiver init failed: " + (initRes ? initRes.error : "unknown error");
+        return false;
+    }
+}
+
+function broadcastRecodedSwarmFrame(transport) {
+    if (!window.BadHub || !window.BadHub.recodeReceiverFrame) return;
+    const recodeRes = window.BadHub.recodeReceiverFrame();
+    if (!recodeRes || !recodeRes.success || !recodeRes.frame) return;
+
+    const frame = recodeRes.frame;
+    if (transport === "broadcast" && activeBroadcastChannel) {
+        activeBroadcastChannel.postMessage({ type: "frame", data: frame });
+    } else if (transport === "nostr") {
+        const pool = getNostrPool();
+        if (pool && currentRoomId) {
+            if (!receiverNostrPrivKey && typeof window.NostrTools !== "undefined") {
+                receiverNostrPrivKey = window.NostrTools.generatePrivateKey();
+            }
+            let binary = "";
+            const len = frame.byteLength;
+            for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(frame[i]);
+            }
+            const b64 = btoa(binary);
+            const ev = window.NostrTools.finishEvent({
+                kind: 20001,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [
+                    ["d", currentRoomId],
+                    ["t", "badhub-frame"]
+                ],
+                content: b64
+            }, receiverNostrPrivKey);
+            pool.publish(NOSTR_RELAYS, ev);
+        }
+    } else if (transport === "magic" || transport === "airgap") {
+        if (activeDataChannel && activeDataChannel.readyState === "open") {
+            try {
+                if (activeDataChannel.bufferedAmount < 128 * 1024) {
+                    activeDataChannel.send(frame);
+                }
+            } catch (err) {
+                // Ignore transient channel errors
+            }
+        }
+    }
+}
+
 function startReceiving() {
     if (!window.BadHub) return;
 
     isReceiving = true;
+    receiverInitialized = false;
+    pendingMetaBytes = null;
+    pendingMetaInfo = null;
+    currentReceiverMeta = null;
+
     document.getElementById("btnStartRecv").disabled = true;
     document.getElementById("btnStopRecv").disabled = false;
     document.getElementById("downloadContainer").classList.add("hidden");
+    const promptBox = document.getElementById("recvDiskPrompt");
+    if (promptBox) promptBox.classList.add("hidden");
 
     const passphrase = document.getElementById("recvPassphrase").value || "badhub-default-secret";
     const transport = document.querySelector('input[name="recvTransport"]:checked').value;
@@ -966,26 +1124,45 @@ function startReceiving() {
     const droppedEl = document.getElementById("recvMetricDropped");
     const integrityEl = document.getElementById("recvMetricIntegrity");
     const progressBar = document.getElementById("recvProgressBar");
+    const recodedEl = document.getElementById("recvMetricRecoded");
+    const genEl = document.getElementById("recvMetricGen");
 
     statusEl.innerText = "Listening for incoming stream...";
     progressBar.style.width = "0%";
-
-    let receiverInitialized = false;
+    if (recodedEl) recodedEl.innerText = "0 frames";
+    if (genEl) genEl.innerText = "Gen 0 / 1";
 
     // Incoming wire packet handler
-    const onIncomingWirePacket = (packetData) => {
+    const onIncomingWirePacket = async (packetData) => {
         if (!isReceiving) return;
         const bytes = new Uint8Array(packetData);
 
-        // Check if metadata packet
+        // Check if metadata packet (< 1380 bytes)
         if (bytes.length < 1380) {
             if (!receiverInitialized) {
-                const initRes = window.BadHub.initReceiver(bytes, passphrase);
-                if (initRes.success) {
-                    receiverInitialized = true;
-                    fileEl.innerText = `${initRes.name} (${formatBytes(initRes.size)})`;
-                    statusEl.innerText = "Metadata validated. Receiving shards...";
+                if (directDiskEnabled && typeof window.showSaveFilePicker === "function" && !diskWritableStream) {
+                    if (!pendingMetaBytes) {
+                        // Inspect metadata
+                        const testRes = window.BadHub.initReceiver(bytes, passphrase);
+                        if (testRes && testRes.success) {
+                            pendingMetaBytes = bytes;
+                            pendingMetaInfo = testRes;
+                            fileEl.innerText = `${testRes.name} (${formatBytes(testRes.size)})`;
+                            if (genEl) genEl.innerText = `Gen 0 / ${testRes.totalGenerations}`;
+                            statusEl.innerText = "Direct-to-Disk: Select destination file to start streaming...";
+
+                            const pBox = document.getElementById("recvDiskPrompt");
+                            const pText = document.getElementById("recvDiskPromptText");
+                            if (pBox && pText) {
+                                pText.innerHTML = `Incoming stream: <strong>${testRes.name}</strong> (${formatBytes(testRes.size)}, ${testRes.totalGenerations} generation(s)). Choose save location to begin direct-to-disk streaming:`;
+                                pBox.classList.remove("hidden");
+                            }
+                        }
+                    }
+                    return;
                 }
+
+                setupReceiver(bytes, passphrase);
             }
             return;
         }
@@ -997,27 +1174,59 @@ function startReceiving() {
                 return;
             }
 
+            // P2P Swarm Recoding: when progress >= 30%, recode and broadcast innovative frame to swarm
+            if (swarmSeedEnabled && ingestRes.percent >= 30.0 && !ingestRes.completed) {
+                if (ingestRes.framesReceived % 3 === 0) {
+                    broadcastRecodedSwarmFrame(transport);
+                }
+            }
+
             // Throttle UI updates to prevent mobile DOM thrashing
-            if (ingestRes.framesReceived % 16 === 0 || ingestRes.completed) {
+            if (ingestRes.framesReceived % 8 === 0 || ingestRes.completed) {
                 framesEl.innerText = ingestRes.framesReceived;
                 droppedEl.innerText = ingestRes.framesDropped;
+                if (recodedEl) recodedEl.innerText = ingestRes.framesRecoded + " frames";
+                if (genEl && currentReceiverMeta) {
+                    genEl.innerText = `Gen ${ingestRes.currentGeneration + 1} / ${currentReceiverMeta.totalGenerations}`;
+                }
 
                 progressBar.style.width = ingestRes.percent.toFixed(1) + "%";
                 percentEl.innerText = ingestRes.percent.toFixed(1) + "%";
             }
 
             if (ingestRes.completed) {
-                // Finalize and verify
+                if (diskWritableStream) {
+                    statusEl.innerText = "Flushing disk buffer...";
+                    try {
+                        await diskWriteChain;
+                        await diskWritableStream.close();
+                        diskWritableStream = null;
+                    } catch (err) {
+                        console.error("Error closing disk stream:", err);
+                    }
+                }
+
+                // Finalize and verify bit-exact integrity
                 const finalRes = window.BadHub.finalizeReceiver();
                 if (finalRes && finalRes.success) {
-                    statusEl.innerText = "Transfer Complete & Verified!";
+                    statusEl.innerText = finalRes.isStreaming
+                        ? "Transfer Complete & Saved to Disk!"
+                        : "Transfer Complete & Verified!";
                     integrityEl.innerText = "100% BIT-EXACT MATCH";
                     integrityEl.className = "metric-value highlight-text";
                     progressBar.style.width = "100%";
                     percentEl.innerText = "100.0%";
 
-                    receivedFileBlob = new Blob([finalRes.data]);
-                    receivedFileName = finalRes.name;
+                    const downloadBtn = document.getElementById("btnDownload");
+                    if (finalRes.isStreaming) {
+                        downloadBtn.innerText = "Streamed Directly to Disk (0 RAM)";
+                        downloadBtn.disabled = true;
+                    } else {
+                        receivedFileBlob = new Blob([finalRes.data]);
+                        receivedFileName = finalRes.name;
+                        downloadBtn.innerText = "Download Reconstructed File";
+                        downloadBtn.disabled = false;
+                    }
 
                     document.getElementById("verifiedChecksum").innerText = "SHA-256: " + finalRes.checksum;
                     document.getElementById("downloadContainer").classList.remove("hidden");
@@ -1056,6 +1265,11 @@ function stopReceiving() {
     isReceiving = false;
     document.getElementById("btnStopRecv").disabled = true;
     document.getElementById("btnStartRecv").disabled = false;
+    const promptBox = document.getElementById("recvDiskPrompt");
+    if (promptBox) promptBox.classList.add("hidden");
+    pendingMetaBytes = null;
+    pendingMetaInfo = null;
+
     if (activeNostrReceiverSub) {
         activeNostrReceiverSub.unsub();
         activeNostrReceiverSub = null;
@@ -1200,15 +1414,15 @@ async function runSimulation() {
     }
 
     const passphrase = "simulation-secret-passphrase-2026";
-    log("Initializing WASM Sender (RLNC Sliding Window: 32, Redundancy: 40%)...");
+    log("Initializing WASM Sender (RLNC Sliding Window: 64, Generation Size: 64, Redundancy: 40%)...");
 
-    const senderRes = window.BadHub.initSender("simulation-test.bin", syntheticData, passphrase, redundancy, 32);
+    const senderRes = window.BadHub.initSender("simulation-test.bin", syntheticData, passphrase, redundancy, 64, 64);
     if (!senderRes.success) {
         log("Sender init failed: " + senderRes.error, "error");
         btn.disabled = false;
         return;
     }
-    log(`Sender initialized: ${senderRes.totalChunks} chunks, SHA-256=${senderRes.checksum.slice(0, 16)}...`);
+    log(`Sender initialized: ${senderRes.totalChunks} chunks in ${senderRes.totalGenerations} generation(s), SHA-256=${senderRes.checksum.slice(0, 16)}...`);
 
     log("Initializing WASM Receiver with encrypted metadata...");
     const recvRes = window.BadHub.initReceiver(senderRes.encryptedMetadata, passphrase);
@@ -1254,10 +1468,19 @@ async function runSimulation() {
     log(`Emission complete: ${stats.dataPackets} data, ${stats.parityPackets} parity. ${totalDropped} frames dropped (${lossPctEl.innerText}).`);
     log("Feeding surviving frames to Gauss-Jordan incremental linear solver...");
 
+    let swarmRecodedCount = 0;
     for (let i = 0; i < framesToFeed.length; i++) {
         const ingestRes = window.BadHub.ingestReceiverFrame(framesToFeed[i]);
         const pct = Math.min(100, Math.round(((i + 1) / framesToFeed.length) * 100));
         progressBar.style.width = pct + "%";
+
+        if (pct >= 30 && swarmRecodedCount < 2) {
+            swarmRecodedCount++;
+            const recodedRes = window.BadHub.recodeReceiverFrame();
+            if (recodedRes && recodedRes.success) {
+                log(`[P2P Swarm] Generated innovative recoded frame #${swarmRecodedCount} (${recodedRes.frame.length} B) over GF(2) at ${pct}% progress!`, "info");
+            }
+        }
 
         if (i % 8 === 0) {
             await new Promise(r => setTimeout(r, 0));
@@ -1306,5 +1529,19 @@ window.addEventListener("DOMContentLoaded", () => {
         passInput.addEventListener("input", () => {
             if (currentRoomId) updateMagicLink(currentRoomId);
         });
+    }
+
+    // Check FileSystem Access API support for direct-to-disk streaming
+    const diskToggle = document.getElementById("recvDirectDiskToggle");
+    const diskBadge = document.getElementById("recvDiskBadge");
+    if (typeof window.showSaveFilePicker !== "function") {
+        if (diskToggle) {
+            diskToggle.checked = false;
+            diskToggle.disabled = true;
+        }
+        if (diskBadge) {
+            diskBadge.innerText = "Not Supported (Memory Mode)";
+            diskBadge.title = "Browser lacks File System Access API support";
+        }
     }
 });
