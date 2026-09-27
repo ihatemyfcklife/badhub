@@ -73,7 +73,7 @@ func safeJsFunc(fn func(this js.Value, args []js.Value) any) js.Func {
 func main() {
 	hub := js.Global().Get("Object").New()
 
-	hub.Set("version", "1.4.0")
+	hub.Set("version", "1.8.0")
 	hub.Set("ready", true)
 	hub.Set("createSha256", safeJsFunc(jsCreateSha256))
 	hub.Set("updateSha256", safeJsFunc(jsUpdateSha256))

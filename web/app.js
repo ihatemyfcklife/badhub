@@ -56,9 +56,10 @@ async function initWasm() {
 
         if (window.BadHub && window.BadHub.ready) {
             statusDot.className = "status-dot ready";
-            statusText.innerText = "Engine Ready (WASM v" + window.BadHub.version + ")";
+            statusText.innerText = "Engine Ready (v" + window.BadHub.version + ")";
             checkSenderReady();
             checkUrlHash();
+            fetchGitHubBadHubVersion();
         } else {
             throw new Error("BadHub global bridge was not registered");
         }
@@ -66,6 +67,23 @@ async function initWasm() {
         statusDot.className = "status-dot error";
         statusText.innerText = "WASM Initialization Failed: " + err.message;
         console.error("WASM Load Error:", err);
+    }
+}
+
+async function fetchGitHubBadHubVersion() {
+    try {
+        const resp = await fetch("https://api.github.com/repos/ihatemyfcklife/badhub/releases/latest");
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data && data.tag_name) {
+                const statusText = document.getElementById("statusText");
+                if (statusText && statusText.innerText.startsWith("Engine Ready")) {
+                    statusText.innerText = `Engine Ready (${data.tag_name})`;
+                }
+            }
+        }
+    } catch (e) {
+        // Fallback to embedded version
     }
 }
 
