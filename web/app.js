@@ -136,7 +136,10 @@ function renderQRCode(text) {
         const qr = qrcode(0, "M");
         qr.addData(text);
         qr.make();
-        container.innerHTML = qr.createSvgTag(5, 0);
+        const svg = qr.createSvgTag(5, 4);
+        container.innerHTML = svg
+            .replaceAll('fill="white"', 'fill="#0a0e17"')
+            .replaceAll('fill="black"', 'fill="#00f0ff"');
     } catch (err) {
         console.error("QR Code error:", err);
     }
