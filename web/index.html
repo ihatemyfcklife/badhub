@@ -67,6 +67,10 @@
                         <span>Magic Link & QR Code (Automated P2P)</span>
                     </label>
                     <label class="radio-label">
+                        <input type="radio" name="sendTransport" value="blossom" onchange="switchSendTransport(this.value)">
+                        <span>Decentralized Blossom Storage (Asynchronous - Sender Offline)</span>
+                    </label>
+                    <label class="radio-label">
                         <input type="radio" name="sendTransport" value="nostr" onchange="switchSendTransport(this.value)">
                         <span>Decentralized Relays (Nostr - Zero IP Exposure)</span>
                     </label>
@@ -108,6 +112,43 @@
                             </div>
                         </div>
                     </details>
+                </div>
+
+                <!-- Decentralized Blossom Storage Box for Sender -->
+                <div id="sendBlossomBox" class="magic-box hidden">
+                    <div class="privacy-header">
+                        <label class="control-label font-bold" style="color: var(--accent-cyan);">Decentralized Blossom Network (Nostr Storage)</label>
+                        <span class="privacy-badge badge-turn" id="blossomStatusBadge">Asynchronous</span>
+                    </div>
+                    <p class="privacy-hint" style="margin-top: 6px;">
+                        Encrypts the file client-side with ChaCha20-Poly1305 and uploads the ciphertext to federated Blossom servers. <strong>You can safely close this page or turn off your device once the upload finishes.</strong>
+                    </p>
+
+                    <div class="form-group" style="margin-top: 10px;">
+                        <label for="sendBlossomServer">Target Blossom Storage Server</label>
+                        <select id="sendBlossomServer" class="input-text font-mono" onchange="onBlossomServerChange(this.value)">
+                            <option value="https://nostr.download">https://nostr.download (Community CDN)</option>
+                            <option value="https://blossom.primal.net">https://blossom.primal.net (Primal Network)</option>
+                            <option value="https://blossom.nostr.hu">https://blossom.nostr.hu (Nostr HU)</option>
+                            <option value="custom">Custom Server...</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group hidden" id="customBlossomServerGroup">
+                        <label for="txtCustomBlossomServer">Custom Blossom Server URL</label>
+                        <input type="text" id="txtCustomBlossomServer" class="input-text font-mono" placeholder="https://my-blossom-server.example.com">
+                    </div>
+
+                    <div class="share-box" id="sendBlossomShareBox" style="display: none; margin-top: 15px;">
+                        <label>Shareable Asynchronous Blossom Link</label>
+                        <div class="share-input-group">
+                            <input type="text" id="txtBlossomLink" class="input-text font-mono" readonly placeholder="Upload file to generate Blossom link...">
+                            <button class="btn btn-secondary" id="btnCopyBlossomLink" onclick="copyBlossomLink()">Copy Link</button>
+                        </div>
+                        <p class="help-text" style="color: var(--accent-cyan); margin-top: 6px;">
+                            The file is securely preserved on Blossom. The recipient can download it anytime, even when your device is turned off.
+                        </p>
+                    </div>
                 </div>
 
                 <!-- Magic Link & QR Code Box for Sender -->
@@ -215,6 +256,10 @@
                                 <span>Magic Link / Room Code (Automated P2P)</span>
                             </label>
                             <label class="radio-label">
+                                <input type="radio" name="recvTransport" value="blossom" onchange="switchRecvTransport(this.value)">
+                                <span>Decentralized Blossom Storage (Asynchronous Offline Download)</span>
+                            </label>
+                            <label class="radio-label">
                                 <input type="radio" name="recvTransport" value="nostr" onchange="switchRecvTransport(this.value)">
                                 <span>Decentralized Relays (Nostr - Zero IP Exposure)</span>
                             </label>
@@ -308,6 +353,18 @@
 
                     <p class="desc">2. Copy this Answer Token back to the Sender:</p>
                     <textarea id="txtRecvAnswer" class="code-area" placeholder="Answer token will appear here..." readonly></textarea>
+                </div>
+
+                <!-- Blossom Retrieval Box for Receiver -->
+                <div id="recvBlossomBox" class="magic-box hidden">
+                    <div class="share-box">
+                        <label for="recvBlossomInput">Blossom Blob URL or SHA-256 Hash</label>
+                        <div class="share-input-group">
+                            <input type="text" id="recvBlossomInput" class="input-text font-mono" placeholder="https://nostr.download/<sha256> or hex hash...">
+                            <button class="btn btn-primary" id="btnStartBlossomRecv" onclick="startBlossomDownload()">Download & Decrypt</button>
+                        </div>
+                        <small>Directly streams and decrypts the file from federated Blossom servers. The sender does not need to be online.</small>
+                    </div>
                 </div>
 
                 <div class="action-bar" id="recvManualActionBar">

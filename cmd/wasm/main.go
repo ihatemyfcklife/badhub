@@ -11,6 +11,7 @@ import (
 	"sync"
 	"syscall/js"
 
+	"github.com/ihatemyfcklife/badhub"
 	"github.com/ihatemyfcklife/badsharing"
 )
 
@@ -52,6 +53,10 @@ var (
 	hasherMu   sync.Mutex
 	hasherSeq  int
 	hasherPool = make(map[int]hash.Hash)
+
+	blossomMu         sync.Mutex
+	currentBlossomEnc *badhub.BlossomEncryptor
+	currentBlossomDec *badhub.BlossomDecryptor
 )
 
 func safeJsFunc(fn func(this js.Value, args []js.Value) any) js.Func {
@@ -68,7 +73,7 @@ func safeJsFunc(fn func(this js.Value, args []js.Value) any) js.Func {
 func main() {
 	hub := js.Global().Get("Object").New()
 
-	hub.Set("version", "1.3.0")
+	hub.Set("version", "1.4.0")
 	hub.Set("ready", true)
 	hub.Set("createSha256", safeJsFunc(jsCreateSha256))
 	hub.Set("updateSha256", safeJsFunc(jsUpdateSha256))
@@ -86,6 +91,14 @@ func main() {
 	hub.Set("finalizeReceiver", safeJsFunc(jsFinalizeReceiver))
 	hub.Set("resetSession", safeJsFunc(jsResetSession))
 	hub.Set("deriveKeyHex", safeJsFunc(jsDeriveKeyHex))
+
+	// Decentralized Blossom Storage API
+	hub.Set("initBlossomEncryptor", safeJsFunc(jsInitBlossomEncryptor))
+	hub.Set("encryptBlossomChunk", safeJsFunc(jsEncryptBlossomChunk))
+	hub.Set("initBlossomDecryptor", safeJsFunc(jsInitBlossomDecryptor))
+	hub.Set("decryptBlossomChunk", safeJsFunc(jsDecryptBlossomChunk))
+	hub.Set("finalizeBlossomDecryption", safeJsFunc(jsFinalizeBlossomDecryption))
+	hub.Set("resetBlossomSession", safeJsFunc(jsResetBlossomSession))
 
 	js.Global().Set("BadHub", hub)
 
@@ -691,6 +704,11 @@ func jsResetSession(this js.Value, args []js.Value) any {
 	}
 	stateMu.Unlock()
 
+	blossomMu.Lock()
+	currentBlossomEnc = nil
+	currentBlossomDec = nil
+	blossomMu.Unlock()
+
 	res := js.Global().Get("Object").New()
 	res.Set("success", true)
 	return res
@@ -704,6 +722,165 @@ func jsDeriveKeyHex(this js.Value, args []js.Value) any {
 	passphrase := args[0].String()
 	key := badsharing.DeriveKeyFromPassphrase(passphrase)
 	return hex.EncodeToString(key[:])
+}
+
+// Blossom Decentralized Storage Handlers
+
+func jsInitBlossomEncryptor(this js.Value, args []js.Value) any {
+	if len(args) < 4 {
+		return jsError("initBlossomEncryptor requires fileName, fileSize, checksumHex, and passphrase")
+	}
+	name := args[0].String()
+	size := uint64(args[1].Float())
+	checksum := args[2].String()
+	passphrase := args[3].String()
+
+	meta := badhub.BlossomMetadata{
+		Name:     name,
+		Size:     size,
+		Checksum: checksum,
+	}
+
+	enc, header, err := badhub.NewBlossomEncryptor(meta, passphrase)
+	if err != nil {
+		return jsError(fmt.Sprintf("failed to initialize Blossom encryptor: %v", err))
+	}
+
+	blossomMu.Lock()
+	currentBlossomEnc = enc
+	blossomMu.Unlock()
+
+	jsHeader := js.Global().Get("Uint8Array").New(len(header))
+	js.CopyBytesToJS(jsHeader, header)
+
+	res := js.Global().Get("Object").New()
+	res.Set("success", true)
+	res.Set("header", jsHeader)
+	return res
+}
+
+func jsEncryptBlossomChunk(this js.Value, args []js.Value) any {
+	if len(args) < 1 {
+		return jsError("encryptBlossomChunk requires plainChunk")
+	}
+	blossomMu.Lock()
+	enc := currentBlossomEnc
+	blossomMu.Unlock()
+	if enc == nil {
+		return jsError("blossom encryptor not initialized")
+	}
+
+	jsChunk := args[0]
+	chunkLen := jsChunk.Get("length").Int()
+	buf := make([]byte, chunkLen)
+	if chunkLen > 0 {
+		js.CopyBytesToGo(buf, jsChunk)
+	}
+
+	sealed, err := enc.EncryptChunk(buf)
+	if err != nil {
+		return jsError(fmt.Sprintf("failed to encrypt blossom chunk: %v", err))
+	}
+
+	jsSealed := js.Global().Get("Uint8Array").New(len(sealed))
+	js.CopyBytesToJS(jsSealed, sealed)
+
+	res := js.Global().Get("Object").New()
+	res.Set("success", true)
+	res.Set("chunk", jsSealed)
+	return res
+}
+
+func jsInitBlossomDecryptor(this js.Value, args []js.Value) any {
+	if len(args) < 2 {
+		return jsError("initBlossomDecryptor requires headerBytes and passphrase")
+	}
+	jsHeader := args[0]
+	passphrase := args[1].String()
+
+	headerLen := jsHeader.Get("length").Int()
+	buf := make([]byte, headerLen)
+	if headerLen > 0 {
+		js.CopyBytesToGo(buf, jsHeader)
+	}
+
+	dec, meta, consumed, err := badhub.NewBlossomDecryptor(buf, passphrase)
+	if err != nil {
+		return jsError(fmt.Sprintf("failed to initialize Blossom decryptor: %v", err))
+	}
+
+	blossomMu.Lock()
+	currentBlossomDec = dec
+	blossomMu.Unlock()
+
+	res := js.Global().Get("Object").New()
+	res.Set("success", true)
+	res.Set("name", meta.Name)
+	res.Set("size", float64(meta.Size))
+	res.Set("checksum", meta.Checksum)
+	res.Set("headerConsumed", consumed)
+	return res
+}
+
+func jsDecryptBlossomChunk(this js.Value, args []js.Value) any {
+	if len(args) < 1 {
+		return jsError("decryptBlossomChunk requires sealedChunk")
+	}
+	blossomMu.Lock()
+	dec := currentBlossomDec
+	blossomMu.Unlock()
+	if dec == nil {
+		return jsError("blossom decryptor not initialized")
+	}
+
+	jsChunk := args[0]
+	chunkLen := jsChunk.Get("length").Int()
+	buf := make([]byte, chunkLen)
+	if chunkLen > 0 {
+		js.CopyBytesToGo(buf, jsChunk)
+	}
+
+	plain, err := dec.DecryptChunk(buf)
+	if err != nil {
+		return jsError(fmt.Sprintf("failed to decrypt blossom chunk: %v", err))
+	}
+
+	jsPlain := js.Global().Get("Uint8Array").New(len(plain))
+	js.CopyBytesToJS(jsPlain, plain)
+
+	res := js.Global().Get("Object").New()
+	res.Set("success", true)
+	res.Set("chunk", jsPlain)
+	res.Set("bytesRead", float64(dec.BytesRead()))
+	res.Set("totalSize", float64(dec.TotalSize()))
+	return res
+}
+
+func jsFinalizeBlossomDecryption(this js.Value, args []js.Value) any {
+	blossomMu.Lock()
+	dec := currentBlossomDec
+	blossomMu.Unlock()
+	if dec == nil {
+		return jsError("blossom decryptor not initialized")
+	}
+
+	if err := dec.Finalize(); err != nil {
+		return jsError(fmt.Sprintf("blossom integrity verification failed: %v", err))
+	}
+
+	res := js.Global().Get("Object").New()
+	res.Set("success", true)
+	return res
+}
+
+func jsResetBlossomSession(this js.Value, args []js.Value) any {
+	blossomMu.Lock()
+	currentBlossomEnc = nil
+	currentBlossomDec = nil
+	blossomMu.Unlock()
+	res := js.Global().Get("Object").New()
+	res.Set("success", true)
+	return res
 }
 
 func jsError(msg string) js.Value {

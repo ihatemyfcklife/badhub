@@ -195,66 +195,100 @@ function copyMagicLink() {
     });
 }
 
+let activeBlossomXhr = null;
+let activeBlossomAbortController = null;
+
 // Transport mode toggles
 function switchSendTransport(mode) {
     const magicBox = document.getElementById("sendMagicBox");
     const webrtcBox = document.getElementById("sendWebRTCBox");
+    const blossomBox = document.getElementById("sendBlossomBox");
     const privacyBox = document.querySelector("#contentSend .privacy-box");
+    const sendBtn = document.getElementById("btnStartSend");
 
     if (mode === "magic") {
         if (magicBox) magicBox.classList.remove("hidden");
         if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (blossomBox) blossomBox.classList.add("hidden");
         if (privacyBox) privacyBox.classList.remove("hidden");
+        if (sendBtn) sendBtn.innerText = "Start P2P Transmission";
         if (activeNostrSenderSub) { activeNostrSenderSub.unsub(); activeNostrSenderSub = null; }
-        if (selectedFileData && currentRoomId && !senderPeer) {
+        if (selectedFile && currentRoomId && !senderPeer) {
             armSenderRoom(currentRoomId);
         }
+    } else if (mode === "blossom") {
+        if (magicBox) magicBox.classList.add("hidden");
+        if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (blossomBox) blossomBox.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.add("hidden");
+        if (sendBtn) sendBtn.innerText = "Upload Encrypted Blob to Blossom (Offline Ready)";
+        if (senderPeer) { senderPeer.destroy(); senderPeer = null; }
+        if (activeNostrSenderSub) { activeNostrSenderSub.unsub(); activeNostrSenderSub = null; }
     } else if (mode === "nostr") {
         if (magicBox) magicBox.classList.remove("hidden");
         if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (blossomBox) blossomBox.classList.add("hidden");
         if (privacyBox) privacyBox.classList.add("hidden");
+        if (sendBtn) sendBtn.innerText = "Start P2P Transmission";
         if (senderPeer) { senderPeer.destroy(); senderPeer = null; }
-        if (selectedFileData && currentRoomId) {
+        if (selectedFile && currentRoomId) {
             armSenderNostrRoom(currentRoomId);
         }
     } else if (mode === "airgap") {
         if (magicBox) magicBox.classList.add("hidden");
         if (webrtcBox) webrtcBox.classList.remove("hidden");
+        if (blossomBox) blossomBox.classList.add("hidden");
         if (privacyBox) privacyBox.classList.remove("hidden");
+        if (sendBtn) sendBtn.innerText = "Start P2P Transmission";
         if (senderPeer) { senderPeer.destroy(); senderPeer = null; }
         if (activeNostrSenderSub) { activeNostrSenderSub.unsub(); activeNostrSenderSub = null; }
     } else {
         // broadcast
         if (magicBox) magicBox.classList.add("hidden");
         if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (blossomBox) blossomBox.classList.add("hidden");
         if (privacyBox) privacyBox.classList.add("hidden");
+        if (sendBtn) sendBtn.innerText = "Start P2P Transmission";
         if (senderPeer) { senderPeer.destroy(); senderPeer = null; }
         if (activeNostrSenderSub) { activeNostrSenderSub.unsub(); activeNostrSenderSub = null; }
     }
     if (currentRoomId) updateMagicLink(currentRoomId);
+    checkSenderReady();
 }
 
 function switchRecvTransport(mode) {
     const magicBox = document.getElementById("recvMagicBox");
     const webrtcBox = document.getElementById("recvWebRTCBox");
+    const blossomBox = document.getElementById("recvBlossomBox");
     const manualBar = document.getElementById("recvManualActionBar");
     const privacyBox = document.querySelector("#contentRecv .privacy-box");
 
     if (mode === "magic") {
         if (magicBox) magicBox.classList.remove("hidden");
         if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (blossomBox) blossomBox.classList.add("hidden");
         if (manualBar) manualBar.classList.add("hidden");
         if (privacyBox) privacyBox.classList.remove("hidden");
+        if (activeNostrReceiverSub) { activeNostrReceiverSub.unsub(); activeNostrReceiverSub = null; }
+    } else if (mode === "blossom") {
+        if (magicBox) magicBox.classList.add("hidden");
+        if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (blossomBox) blossomBox.classList.remove("hidden");
+        if (manualBar) manualBar.classList.add("hidden");
+        if (privacyBox) privacyBox.classList.remove("hidden");
+        if (receiverPeer) { receiverPeer.destroy(); receiverPeer = null; }
         if (activeNostrReceiverSub) { activeNostrReceiverSub.unsub(); activeNostrReceiverSub = null; }
     } else if (mode === "nostr") {
         if (magicBox) magicBox.classList.remove("hidden");
         if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (blossomBox) blossomBox.classList.add("hidden");
         if (manualBar) manualBar.classList.add("hidden");
         if (privacyBox) privacyBox.classList.add("hidden");
         if (receiverPeer) { receiverPeer.destroy(); receiverPeer = null; }
     } else if (mode === "airgap") {
         if (magicBox) magicBox.classList.add("hidden");
         if (webrtcBox) webrtcBox.classList.remove("hidden");
+        if (blossomBox) blossomBox.classList.add("hidden");
         if (manualBar) manualBar.classList.remove("hidden");
         if (privacyBox) privacyBox.classList.remove("hidden");
         if (activeNostrReceiverSub) { activeNostrReceiverSub.unsub(); activeNostrReceiverSub = null; }
@@ -262,10 +296,38 @@ function switchRecvTransport(mode) {
         // broadcast
         if (magicBox) magicBox.classList.add("hidden");
         if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (blossomBox) blossomBox.classList.add("hidden");
         if (manualBar) manualBar.classList.remove("hidden");
         if (privacyBox) privacyBox.classList.add("hidden");
         if (activeNostrReceiverSub) { activeNostrReceiverSub.unsub(); activeNostrReceiverSub = null; }
     }
+}
+
+function onBlossomServerChange(val) {
+    const customGroup = document.getElementById("customBlossomServerGroup");
+    if (customGroup) {
+        if (val === "custom") {
+            customGroup.classList.remove("hidden");
+        } else {
+            customGroup.classList.add("hidden");
+        }
+    }
+}
+
+function copyBlossomLink() {
+    const txt = document.getElementById("txtBlossomLink");
+    if (!txt || !txt.value) return;
+    navigator.clipboard.writeText(txt.value).then(() => {
+        const btn = document.getElementById("btnCopyBlossomLink");
+        if (btn) {
+            const orig = btn.innerText;
+            btn.innerText = "Copied!";
+            setTimeout(() => { btn.innerText = orig; }, 2000);
+        }
+    }).catch(() => {
+        txt.select();
+        document.execCommand("copy");
+    });
 }
 
 // ==========================================
@@ -845,6 +907,26 @@ function checkUrlHash() {
         };
         tryAutoConnect();
     }
+
+    const blossomBlob = params.get("blossom");
+    if (blossomBlob) {
+        switchTab("recv");
+        const blossomRadio = document.querySelector('input[name="recvTransport"][value="blossom"]');
+        if (blossomRadio) {
+            blossomRadio.checked = true;
+            switchRecvTransport("blossom");
+        }
+        const blossomInput = document.getElementById("recvBlossomInput");
+        const server = params.get("server") || "https://nostr.download";
+        const fullUrl = blossomBlob.startsWith("http") ? blossomBlob : `${server.replace(/\/+$/, "")}/${blossomBlob}`;
+        if (blossomInput) blossomInput.value = fullUrl;
+        if (key) {
+            const passInput = document.getElementById("recvPassphrase");
+            if (passInput) passInput.value = key;
+        }
+        const statusEl = document.getElementById("recvMetricStatus");
+        if (statusEl) statusEl.innerText = "Blossom Blob detected. Ready to download (Sender offline).";
+    }
 }
 
 // Drag & Drop Setup
@@ -908,6 +990,222 @@ function checkSenderReady() {
     }
 }
 
+async function uploadToBlossom(passphrase) {
+    const statusEl = document.getElementById("sendMetricStatus");
+    const percentEl = document.getElementById("sendMetricPercent");
+    const speedEl = document.getElementById("sendMetricSpeed");
+    const progressBar = document.getElementById("sendProgressBar");
+    const dataEl = document.getElementById("sendMetricData");
+    const parityEl = document.getElementById("sendMetricParity");
+    const sessionEl = document.getElementById("sendMetricSession");
+
+    let serverUrl = document.getElementById("sendBlossomServer")?.value;
+    if (serverUrl === "custom") {
+        serverUrl = document.getElementById("txtCustomBlossomServer")?.value.trim();
+    }
+    if (!serverUrl) serverUrl = "https://nostr.download";
+    serverUrl = serverUrl.replace(/\/+$/, "");
+
+    statusEl.innerText = "Computing SHA-256 integrity anchor...";
+    progressBar.style.width = "0%";
+    percentEl.innerText = "0.0%";
+
+    // 1. Compute SHA-256 of original file in 2 MB slices
+    const hasherId = window.BadHub.createSha256();
+    const hashChunkSize = 2 * 1024 * 1024;
+    for (let offset = 0; offset < selectedFile.size; offset += hashChunkSize) {
+        if (!isTransmitting) {
+            releaseWakeLock();
+            return;
+        }
+        const end = Math.min(selectedFile.size, offset + hashChunkSize);
+        const slice = await selectedFile.slice(offset, end).arrayBuffer();
+        window.BadHub.updateSha256(hasherId, new Uint8Array(slice));
+        const hashPct = Math.round((end / selectedFile.size) * 100);
+        progressBar.style.width = (hashPct * 0.1) + "%";
+        percentEl.innerText = (hashPct * 0.1).toFixed(1) + "%";
+        statusEl.innerText = `Computing SHA-256 integrity anchor (${hashPct}%)...`;
+        if (offset % (4 * hashChunkSize) === 0) {
+            await new Promise(r => setTimeout(r, 0));
+        }
+    }
+    const checksumHex = window.BadHub.finalizeSha256(hasherId);
+    if (!checksumHex || !isTransmitting) {
+        releaseWakeLock();
+        return;
+    }
+
+    statusEl.innerText = "Encrypting file with ChaCha20-Poly1305...";
+
+    // 2. Initialize Blossom Encryptor in WASM
+    const initRes = window.BadHub.initBlossomEncryptor(selectedFile.name, selectedFile.size, checksumHex, passphrase);
+    if (!initRes || !initRes.success) {
+        alert("Failed to initialize Blossom encryptor: " + (initRes ? initRes.error : "unknown error"));
+        stopTransmission();
+        return;
+    }
+
+    const encryptedParts = [initRes.header];
+    const streamSliceSize = 1024 * 1024; // 1 MB slices
+    let encryptedBytes = 0;
+
+    for (let offset = 0; offset < selectedFile.size; offset += streamSliceSize) {
+        if (!isTransmitting) {
+            releaseWakeLock();
+            if (window.BadHub.resetBlossomSession) window.BadHub.resetBlossomSession();
+            return;
+        }
+        const end = Math.min(selectedFile.size, offset + streamSliceSize);
+        const slice = await selectedFile.slice(offset, end).arrayBuffer();
+        const encChunkRes = window.BadHub.encryptBlossomChunk(new Uint8Array(slice));
+        if (!encChunkRes || !encChunkRes.success) {
+            alert("Chunk encryption failed: " + (encChunkRes ? encChunkRes.error : "unknown error"));
+            stopTransmission();
+            return;
+        }
+        encryptedParts.push(encChunkRes.chunk);
+        encryptedBytes += encChunkRes.chunk.length;
+
+        const encPct = Math.round((end / selectedFile.size) * 100);
+        progressBar.style.width = (10 + encPct * 0.3) + "%";
+        percentEl.innerText = (10 + encPct * 0.3).toFixed(1) + "%";
+        statusEl.innerText = `Encrypting with ChaCha20-Poly1305 (${encPct}%)...`;
+        if (offset % (4 * streamSliceSize) === 0) {
+            await new Promise(r => setTimeout(r, 0));
+        }
+    }
+
+    const encryptedBlob = new Blob(encryptedParts, { type: "application/octet-stream" });
+
+    // 3. Compute SHA-256 of encrypted blob (Blossom blob ID)
+    statusEl.innerText = "Computing Blossom content address...";
+    const blobHasherId = window.BadHub.createSha256();
+    for (let offset = 0; offset < encryptedBlob.size; offset += hashChunkSize) {
+        if (!isTransmitting) {
+            releaseWakeLock();
+            return;
+        }
+        const end = Math.min(encryptedBlob.size, offset + hashChunkSize);
+        const slice = await encryptedBlob.slice(offset, end).arrayBuffer();
+        window.BadHub.updateSha256(blobHasherId, new Uint8Array(slice));
+    }
+    const blobSha256 = window.BadHub.finalizeSha256(blobHasherId);
+    if (!blobSha256 || !isTransmitting) {
+        releaseWakeLock();
+        return;
+    }
+
+    if (sessionEl) sessionEl.innerText = blobSha256.substring(0, 16) + "...";
+    if (dataEl) dataEl.innerText = formatBytes(encryptedBlob.size);
+    if (parityEl) parityEl.innerText = "AEAD Tagged";
+
+    // 4. Construct Blossom upload authorization event (kind 24242)
+    if (!senderNostrPrivKey && typeof window.NostrTools !== "undefined") {
+        senderNostrPrivKey = window.NostrTools.generatePrivateKey();
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const authEvent = window.NostrTools.finishEvent({
+        kind: 24242,
+        created_at: now,
+        tags: [
+            ["t", "upload"],
+            ["x", blobSha256],
+            ["expiration", (now + 1800).toString()]
+        ],
+        content: `BadHub encrypted upload: ${selectedFile.name}`
+    }, senderNostrPrivKey);
+    const authHeader = "Nostr " + btoa(unescape(encodeURIComponent(JSON.stringify(authEvent))));
+
+    // 5. Upload to Blossom server via XMLHttpRequest for granular progress
+    statusEl.innerText = `Uploading encrypted blob to ${serverUrl}...`;
+    const startTime = performance.now();
+
+    await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        activeBlossomXhr = xhr;
+        xhr.open("PUT", `${serverUrl}/upload`);
+        xhr.setRequestHeader("Authorization", authHeader);
+        xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable && isTransmitting) {
+                const upPct = Math.round((e.loaded / e.total) * 100);
+                progressBar.style.width = (40 + upPct * 0.6) + "%";
+                percentEl.innerText = (40 + upPct * 0.6).toFixed(1) + "%";
+                statusEl.innerText = `Uploading to Blossom (${upPct}%)...`;
+                const elapsedSec = (performance.now() - startTime) / 1000;
+                if (elapsedSec > 0 && speedEl) {
+                    const mbps = (e.loaded / 1048576) / elapsedSec;
+                    speedEl.innerText = `${mbps.toFixed(2)} MB/s`;
+                }
+            }
+        };
+
+        xhr.onload = () => {
+            activeBlossomXhr = null;
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(xhr.responseText);
+            } else {
+                reject(new Error(`Server returned HTTP ${xhr.status}: ${xhr.responseText || xhr.statusText}`));
+            }
+        };
+
+        xhr.onerror = () => {
+            activeBlossomXhr = null;
+            reject(new Error("Network connection error to Blossom server"));
+        };
+
+        xhr.onabort = () => {
+            activeBlossomXhr = null;
+            reject(new Error("Upload aborted"));
+        };
+
+        xhr.send(encryptedBlob);
+    }).then(() => {
+        progressBar.style.width = "100%";
+        percentEl.innerText = "100.0%";
+        statusEl.innerText = "Upload Complete & Stored on Blossom! Sender can safely close this page.";
+        statusEl.className = "metric-value highlight-text";
+
+        // Generate Blossom Link
+        const blossomLink = `${window.location.origin}${window.location.pathname}#blossom=${blobSha256}&server=${encodeURIComponent(serverUrl)}&key=${encodeURIComponent(passphrase)}`;
+
+        const shareBox = document.getElementById("sendBlossomShareBox");
+        const linkInput = document.getElementById("txtBlossomLink");
+        if (shareBox) shareBox.style.display = "block";
+        if (linkInput) linkInput.value = blossomLink;
+
+        // Render QR Code for Blossom link
+        const qrCanvas = document.getElementById("qrCodeCanvas");
+        const qrContainer = document.getElementById("qrCodeContainer");
+        if (qrCanvas && typeof window.QRCode !== "undefined") {
+            qrCanvas.innerHTML = "";
+            new window.QRCode(qrCanvas, {
+                text: blossomLink,
+                width: 180,
+                height: 180,
+                colorDark: "#10b981",
+                colorLight: "#0f172a",
+                correctLevel: window.QRCode.CorrectLevel.M
+            });
+            if (qrContainer) qrContainer.classList.remove("hidden");
+        }
+
+        document.getElementById("btnStopSend").disabled = true;
+        document.getElementById("btnStartSend").disabled = false;
+        isTransmitting = false;
+        releaseWakeLock();
+        if (window.BadHub.resetBlossomSession) window.BadHub.resetBlossomSession();
+    }).catch((err) => {
+        if (isTransmitting) {
+            statusEl.innerText = "Error: " + err.message;
+            statusEl.className = "metric-value color-danger";
+            alert("Blossom Upload Failed: " + err.message);
+            stopTransmission();
+        }
+    });
+}
+
 // ==========================================
 // P2P SENDER IMPLEMENTATION
 // ==========================================
@@ -924,6 +1222,11 @@ async function startSending() {
     const passphrase = document.getElementById("sendPassphrase").value || "badhub-default-secret";
     const redundancy = parseFloat(document.getElementById("sendRedundancy").value) / 100.0;
     const transport = document.querySelector('input[name="sendTransport"]:checked').value;
+
+    if (transport === "blossom") {
+        await uploadToBlossom(passphrase);
+        return;
+    }
 
     const statusEl = document.getElementById("sendMetricStatus");
     const percentEl = document.getElementById("sendMetricPercent");
@@ -1129,6 +1432,10 @@ async function startSending() {
 function stopTransmission() {
     isTransmitting = false;
     releaseWakeLock();
+    if (activeBlossomXhr) {
+        activeBlossomXhr.abort();
+        activeBlossomXhr = null;
+    }
     document.getElementById("btnStopSend").disabled = true;
     document.getElementById("btnStartSend").disabled = false;
     document.getElementById("sendMetricStatus").innerText = "Stopped";
@@ -1138,6 +1445,9 @@ function stopTransmission() {
     }
     if (window.BadHub && window.BadHub.resetSession) {
         window.BadHub.resetSession();
+    }
+    if (window.BadHub && window.BadHub.resetBlossomSession) {
+        window.BadHub.resetBlossomSession();
     }
 }
 
@@ -1424,6 +1734,12 @@ function startReceiving() {
 function stopReceiving() {
     isReceiving = false;
     releaseWakeLock();
+    if (activeBlossomAbortController) {
+        activeBlossomAbortController.abort();
+        activeBlossomAbortController = null;
+    }
+    const startBlossomBtn = document.getElementById("btnStartBlossomRecv");
+    if (startBlossomBtn) startBlossomBtn.disabled = false;
     document.getElementById("btnStopRecv").disabled = true;
     document.getElementById("btnStartRecv").disabled = false;
     const promptBox = document.getElementById("recvDiskPrompt");
@@ -1443,6 +1759,222 @@ function stopReceiving() {
     }
     if (window.BadHub && window.BadHub.resetSession) {
         window.BadHub.resetSession();
+    }
+    if (window.BadHub && window.BadHub.resetBlossomSession) {
+        window.BadHub.resetBlossomSession();
+    }
+}
+
+async function startBlossomDownload() {
+    let inputVal = document.getElementById("recvBlossomInput")?.value.trim() || "";
+    const passphrase = document.getElementById("recvPassphrase")?.value || "badhub-secure-swarm-v1";
+
+    if (!inputVal) {
+        alert("Please enter a Blossom Blob URL or SHA-256 hash.");
+        return;
+    }
+
+    // Handle hex SHA-256 hash
+    let blobUrl = inputVal;
+    if (/^[a-fA-F0-9]{64}$/.test(inputVal)) {
+        blobUrl = `https://nostr.download/${inputVal}`;
+    }
+
+    isReceiving = true;
+    acquireWakeLock();
+
+    const startBtn = document.getElementById("btnStartBlossomRecv");
+    const stopBtn = document.getElementById("btnStopRecv");
+    if (startBtn) startBtn.disabled = true;
+    if (stopBtn) stopBtn.disabled = false;
+
+    const fileEl = document.getElementById("recvMetricFile");
+    const statusEl = document.getElementById("recvMetricStatus");
+    const percentEl = document.getElementById("recvMetricPercent");
+    const speedEl = document.getElementById("recvMetricSpeed");
+    const integrityEl = document.getElementById("recvMetricIntegrity");
+    const progressBar = document.getElementById("recvProgressBar");
+
+    progressBar.style.width = "0%";
+    percentEl.innerText = "0.0%";
+    integrityEl.innerText = "CONNECTING...";
+    integrityEl.className = "metric-value";
+    statusEl.innerText = `Connecting to Blossom server: ${blobUrl}...`;
+
+    activeBlossomAbortController = new AbortController();
+    const startTime = performance.now();
+
+    try {
+        const resp = await fetch(blobUrl, { signal: activeBlossomAbortController.signal });
+        if (!resp.ok) {
+            throw new Error(`Blossom server returned HTTP ${resp.status}: ${resp.statusText}`);
+        }
+
+        const reader = resp.body.getReader();
+
+        let decryptorInitialized = false;
+        let decryptorMeta = null;
+        let diskStream = null;
+        let diskFileHandle = null;
+        let isOpfs = false;
+        let decryptedPlainParts = [];
+
+        let streamBuf = new Uint8Array(0);
+        let totalDownloaded = 0;
+
+        function appendToBuffer(buf, newBytes) {
+            const res = new Uint8Array(buf.length + newBytes.length);
+            res.set(buf, 0);
+            res.set(newBytes, buf.length);
+            return res;
+        }
+
+        while (isReceiving) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            totalDownloaded += value.length;
+            streamBuf = appendToBuffer(streamBuf, value);
+
+            // 1. Initialize decryptor from header
+            if (!decryptorInitialized) {
+                if (streamBuf.length >= 8) {
+                    const view = new DataView(streamBuf.buffer, streamBuf.byteOffset, streamBuf.byteLength);
+                    const metaLen = view.getUint32(4, false);
+                    const requiredHeaderLen = 8 + metaLen;
+
+                    if (streamBuf.length >= requiredHeaderLen) {
+                        const headerSlice = streamBuf.slice(0, requiredHeaderLen);
+                        const initRes = window.BadHub.initBlossomDecryptor(headerSlice, passphrase);
+                        if (!initRes || !initRes.success) {
+                            throw new Error("Decryption failed: " + (initRes ? initRes.error : "incorrect passphrase"));
+                        }
+                        decryptorInitialized = true;
+                        decryptorMeta = initRes;
+
+                        fileEl.innerText = `${initRes.name} (${formatBytes(initRes.size)})`;
+                        statusEl.innerText = "Decrypted metadata. Streaming file directly to disk...";
+
+                        // Initialize Direct-to-Disk if enabled
+                        const hasSavePicker = typeof window.showSaveFilePicker === "function";
+                        const hasOPFS = typeof navigator !== "undefined" && navigator.storage && typeof navigator.storage.getDirectory === "function";
+
+                        if (directDiskEnabled) {
+                            if (hasSavePicker) {
+                                try {
+                                    diskFileHandle = await window.showSaveFilePicker({ suggestedName: initRes.name });
+                                    diskStream = await diskFileHandle.createWritable();
+                                } catch (e) {
+                                    console.warn("Save picker bypassed, using memory or OPFS:", e);
+                                }
+                            }
+                            if (!diskStream && hasOPFS) {
+                                try {
+                                    const root = await navigator.storage.getDirectory();
+                                    const safeName = initRes.name.replace(/[/\\?%*:|"<>]/g, '_');
+                                    diskFileHandle = await root.getFileHandle(safeName, { create: true });
+                                    diskStream = await diskFileHandle.createWritable();
+                                    isOpfs = true;
+                                } catch (e) {
+                                    console.warn("OPFS init failed:", e);
+                                }
+                            }
+                        }
+
+                        // Shift buffer past header
+                        streamBuf = streamBuf.slice(requiredHeaderLen);
+                    }
+                }
+            }
+
+            // 2. Extract and decrypt chunks from streamBuf
+            while (decryptorInitialized && streamBuf.length >= 4) {
+                const chunkLen = new DataView(streamBuf.buffer, streamBuf.byteOffset, streamBuf.byteLength).getUint32(0, false);
+                if (streamBuf.length < 4 + chunkLen) {
+                    break; // Wait for full sealed chunk
+                }
+
+                const sealedChunk = streamBuf.slice(4, 4 + chunkLen);
+                streamBuf = streamBuf.slice(4 + chunkLen);
+
+                const decRes = window.BadHub.decryptBlossomChunk(sealedChunk);
+                if (!decRes || !decRes.success) {
+                    throw new Error("Chunk decryption failed: " + (decRes ? decRes.error : "corrupted"));
+                }
+
+                if (diskStream) {
+                    await diskStream.write(decRes.chunk);
+                } else {
+                    decryptedPlainParts.push(decRes.chunk);
+                }
+
+                if (decRes.totalSize > 0) {
+                    const pct = ((decRes.bytesRead / decRes.totalSize) * 100).toFixed(1);
+                    progressBar.style.width = pct + "%";
+                    percentEl.innerText = pct + "%";
+                    statusEl.innerText = `Decrypting and saving: ${formatBytes(decRes.bytesRead)} / ${formatBytes(decRes.totalSize)}`;
+                }
+
+                const elapsedSec = (performance.now() - startTime) / 1000;
+                if (elapsedSec > 0 && speedEl) {
+                    const mbps = (totalDownloaded / 1048576) / elapsedSec;
+                    speedEl.innerText = `${mbps.toFixed(2)} MB/s`;
+                }
+            }
+        }
+
+        // 3. Finalize decryption and verify integrity
+        if (diskStream) {
+            await diskStream.close();
+            diskStream = null;
+        }
+
+        const finalRes = window.BadHub.finalizeBlossomDecryption();
+        if (!finalRes || !finalRes.success) {
+            throw new Error("Integrity verification failed: " + (finalRes ? finalRes.error : "hash mismatch"));
+        }
+
+        progressBar.style.width = "100%";
+        percentEl.innerText = "100.0%";
+        integrityEl.innerText = "100% BIT-EXACT MATCH";
+        integrityEl.className = "metric-value highlight-text";
+
+        const downloadBtn = document.getElementById("btnDownload");
+        if (isOpfs && diskFileHandle) {
+            const opfsFile = await diskFileHandle.getFile();
+            receivedFileBlob = opfsFile;
+            receivedFileName = decryptorMeta.name;
+            downloadBtn.innerText = "Download Reconstructed File (from OPFS Disk)";
+            downloadBtn.disabled = false;
+            statusEl.innerText = "Download Complete & Saved in OPFS Storage (Sender was offline)!";
+        } else if (diskFileHandle && !isOpfs) {
+            downloadBtn.innerText = "Streamed Directly to Disk (0 RAM)";
+            downloadBtn.disabled = true;
+            statusEl.innerText = "Transfer Complete & Saved to Disk (Sender was offline)!";
+        } else {
+            receivedFileBlob = new Blob(decryptedPlainParts, { type: "application/octet-stream" });
+            receivedFileName = decryptorMeta.name;
+            downloadBtn.innerText = "Download Reconstructed File";
+            downloadBtn.disabled = false;
+            statusEl.innerText = "Transfer Complete & Verified (Sender was offline)!";
+        }
+
+        document.getElementById("verifiedChecksum").innerText = "SHA-256: " + decryptorMeta.checksum;
+        document.getElementById("downloadContainer").classList.remove("hidden");
+
+        stopReceiving();
+    } catch (err) {
+        if (isReceiving) {
+            integrityEl.innerText = "FAILED";
+            integrityEl.className = "metric-value color-danger";
+            statusEl.innerText = "Error: " + err.message;
+            alert("Blossom Download Error: " + err.message);
+            stopReceiving();
+        }
+    } finally {
+        activeBlossomAbortController = null;
+        releaseWakeLock();
+        if (window.BadHub.resetBlossomSession) window.BadHub.resetBlossomSession();
     }
 }
 
