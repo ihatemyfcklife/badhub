@@ -86,8 +86,8 @@ body {
 }
 
 .logo-hub {
-    background-color: var(--accent-cyan);
-    color: #0a0e17;
+    background-color: var(--accent-cyan) !important;
+    color: #0a0e17 !important;
     font-weight: 900;
     border-radius: 5px;
     padding: 2px 8px 3px 8px;
@@ -95,7 +95,7 @@ body {
     display: inline-block;
     line-height: 1.1;
     letter-spacing: -0.5px;
-    box-shadow: 0 0 15px var(--accent-cyan-glow);
+    box-shadow: 0 0 15px var(--accent-cyan-glow) !important;
 }
 
 .logo-badge {

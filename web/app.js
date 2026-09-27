@@ -44,7 +44,7 @@ async function initWasm() {
     const go = new Go();
 
     try {
-        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject);
+        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.7.3"), go.importObject);
         go.run(result.instance);
 
         // Await BadHub global bridge initialization
@@ -56,7 +56,8 @@ async function initWasm() {
 
         if (window.BadHub && window.BadHub.ready) {
             statusDot.className = "status-dot ready";
-            statusText.innerText = "Engine Ready (v" + window.BadHub.version + ")";
+            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.7.3";
+            statusText.innerText = "Engine Ready (" + ver + ")";
             checkSenderReady();
             checkUrlHash();
             fetchGitHubBadHubVersion();
@@ -72,6 +73,21 @@ async function initWasm() {
 
 async function fetchGitHubBadHubVersion() {
     try {
+        // 1. Check static version.json first (instant, unaffected by GitHub API rate limits)
+        try {
+            const localResp = await fetch("version.json?v=1.7.3");
+            if (localResp.ok) {
+                const localData = await localResp.json();
+                if (localData && localData.version) {
+                    const statusText = document.getElementById("statusText");
+                    if (statusText && statusText.innerText.startsWith("Engine Ready")) {
+                        statusText.innerText = `Engine Ready (${localData.version})`;
+                    }
+                }
+            }
+        } catch (_) {}
+
+        // 2. Query GitHub releases for live upstream repository version
         const resp = await fetch("https://api.github.com/repos/ihatemyfcklife/badhub/releases/latest");
         if (resp.ok) {
             const data = await resp.json();
@@ -83,7 +99,7 @@ async function fetchGitHubBadHubVersion() {
             }
         }
     } catch (e) {
-        // Fallback to embedded version
+        // Fallback to embedded version already in place
     }
 }
 

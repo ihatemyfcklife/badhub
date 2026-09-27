@@ -3,10 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BadHub - Decentralized WebAssembly P2P File Sharing</title>
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
-    <link rel="alternate icon" type="image/png" href="favicon.png">
-    <link rel="stylesheet" href="style.css">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg?v=1.7.3">
+    <link rel="alternate icon" type="image/png" href="favicon.png?v=1.7.3">
+    <link rel="stylesheet" href="style.css?v=1.7.3">
 </head>
 <body>
     <div class="app-container">
@@ -14,13 +16,13 @@
         <header class="header">
             <div class="logo">
                 <div class="logo-ph" title="BadHub">
-                    <span class="logo-bad">Bad</span><span class="logo-hub">hub</span>
+                    <span class="logo-bad">Bad</span><span class="logo-hub" style="background-color: #00f0ff !important; color: #0a0e17 !important;">hub</span>
                 </div>
             </div>
             <div class="engine-status" id="engineStatus">
                 <span class="privacy-badge badge-turn" id="wakeLockBadge" style="display: none; margin-right: 8px;">Screen Awake</span>
                 <span class="status-dot loading" id="statusDot"></span>
-                <span id="statusText">Loading WebAssembly Engine...</span>
+                <span id="statusText">Loading BadHub Engine...</span>
             </div>
         </header>
 
@@ -513,10 +515,10 @@
     </div>
 
     <!-- Client-Side Libraries & Execution Bridge -->
-    <script src="wasm_exec.js"></script>
-    <script src="qrcode.min.js"></script>
-    <script src="peerjs.min.js"></script>
-    <script src="nostr.bundle.js"></script>
-    <script src="app.js"></script>
+    <script src="wasm_exec.js?v=1.7.3"></script>
+    <script src="qrcode.min.js?v=1.7.3"></script>
+    <script src="peerjs.min.js?v=1.7.3"></script>
+    <script src="nostr.bundle.js?v=1.7.3"></script>
+    <script src="app.js?v=1.7.3"></script>
 </body>
 </html>
