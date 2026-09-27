@@ -195,7 +195,7 @@ async function startSending() {
         if (!activeBroadcastChannel) {
             activeBroadcastChannel = new BroadcastChannel("badhub_p2p_channel");
         }
-        sendWirePacket = (packet) => {
+        sendWirePacket = async (packet) => {
             activeBroadcastChannel.postMessage({ type: "frame", data: packet });
         };
         // Emit encrypted metadata packet 5 times
@@ -210,11 +210,21 @@ async function startSending() {
             stopTransmission();
             return;
         }
-        sendWirePacket = (packet) => {
+        activeDataChannel.bufferedAmountLowThreshold = 64 * 1024;
+        sendWirePacket = async (packet) => {
+            if (activeDataChannel.bufferedAmount > 256 * 1024) {
+                await new Promise(resolve => {
+                    const onLow = () => {
+                        activeDataChannel.removeEventListener("bufferedamountlow", onLow);
+                        resolve();
+                    };
+                    activeDataChannel.addEventListener("bufferedamountlow", onLow);
+                });
+            }
             activeDataChannel.send(packet);
         };
         for (let i = 0; i < 5; i++) {
-            activeDataChannel.send(res.encryptedMetadata);
+            await sendWirePacket(res.encryptedMetadata);
             await new Promise(r => setTimeout(r, 10));
         }
     }
@@ -239,7 +249,7 @@ async function startSending() {
         }
 
         if (frameRes.frame) {
-            sendWirePacket(frameRes.frame);
+            await sendWirePacket(frameRes.frame);
             bytesSent += frameRes.frame.length;
             frameCount++;
 
@@ -254,7 +264,6 @@ async function startSending() {
                     speedEl.innerText = mbps.toFixed(2) + " MB/s";
                 }
 
-                const approxTotal = res.totalChunks * (1.0 + redundancy);
                 const pct = Math.min(99.0, (stats.dataPackets / res.totalChunks) * 100.0);
                 progressBar.style.width = pct.toFixed(1) + "%";
                 percentEl.innerText = pct.toFixed(1) + "%";
@@ -268,6 +277,9 @@ async function startSending() {
     document.getElementById("btnStopSend").disabled = true;
     document.getElementById("btnStartSend").disabled = false;
     isTransmitting = false;
+    if (window.BadHub && window.BadHub.resetSession) {
+        window.BadHub.resetSession();
+    }
 }
 
 function stopTransmission() {
@@ -275,6 +287,9 @@ function stopTransmission() {
     document.getElementById("btnStopSend").disabled = true;
     document.getElementById("btnStartSend").disabled = false;
     document.getElementById("sendMetricStatus").innerText = "Stopped";
+    if (window.BadHub && window.BadHub.resetSession) {
+        window.BadHub.resetSession();
+    }
 }
 
 // ==========================================
@@ -326,6 +341,9 @@ function startReceiving() {
         // Regular 1380-byte encrypted frame
         if (receiverInitialized) {
             const ingestRes = window.BadHub.ingestReceiverFrame(bytes);
+            if (!ingestRes || ingestRes.error) {
+                return;
+            }
             framesEl.innerText = ingestRes.framesReceived;
             droppedEl.innerText = ingestRes.framesDropped;
 
@@ -335,7 +353,7 @@ function startReceiving() {
             if (ingestRes.completed) {
                 // Finalize and verify
                 const finalRes = window.BadHub.finalizeReceiver();
-                if (finalRes.success) {
+                if (finalRes && finalRes.success) {
                     statusEl.innerText = "Transfer Complete & Verified!";
                     integrityEl.innerText = "100% BIT-EXACT MATCH";
                     integrityEl.className = "metric-value highlight-text";
@@ -351,7 +369,7 @@ function startReceiving() {
                 } else {
                     integrityEl.innerText = "CORRUPTED / FAILED";
                     integrityEl.className = "metric-value color-danger";
-                    statusEl.innerText = "Verification failed: " + finalRes.error;
+                    statusEl.innerText = "Verification failed: " + (finalRes ? finalRes.error : "unknown error");
                 }
             }
         }
@@ -380,6 +398,9 @@ function stopReceiving() {
     isReceiving = false;
     document.getElementById("btnStopRecv").disabled = true;
     document.getElementById("btnStartRecv").disabled = false;
+    if (window.BadHub && window.BadHub.resetSession) {
+        window.BadHub.resetSession();
+    }
 }
 
 function triggerDownload() {
@@ -434,9 +455,13 @@ async function acceptWebRTCAnswer() {
         alert("Please paste the receiver's answer token.");
         return;
     }
-    const answer = JSON.parse(atob(rawAnswer));
-    await activePeerConnection.setRemoteDescription(answer);
-    alert("Peer answer configured! Connecting DataChannel...");
+    try {
+        const answer = JSON.parse(atob(rawAnswer));
+        await activePeerConnection.setRemoteDescription(answer);
+        alert("Peer answer configured! Connecting DataChannel...");
+    } catch (err) {
+        alert("Invalid answer token format: " + err.message);
+    }
 }
 
 async function generateWebRTCAnswer() {
@@ -446,27 +471,31 @@ async function generateWebRTCAnswer() {
         return;
     }
 
-    activePeerConnection = new RTCPeerConnection(rtcConfig);
+    try {
+        const offer = JSON.parse(atob(rawOffer));
+        activePeerConnection = new RTCPeerConnection(rtcConfig);
 
-    activePeerConnection.ondatachannel = e => {
-        activeDataChannel = e.channel;
-        activeDataChannel.binaryType = "arraybuffer";
-        activeDataChannel.onopen = () => {
-            alert("WebRTC P2P DataChannel connected on receiver!");
+        activePeerConnection.ondatachannel = e => {
+            activeDataChannel = e.channel;
+            activeDataChannel.binaryType = "arraybuffer";
+            activeDataChannel.onopen = () => {
+                alert("WebRTC P2P DataChannel connected on receiver!");
+            };
         };
-    };
 
-    activePeerConnection.onicecandidate = e => {
-        if (!e.candidate) {
-            const answerStr = JSON.stringify(activePeerConnection.localDescription);
-            document.getElementById("txtRecvAnswer").value = btoa(answerStr);
-        }
-    };
+        activePeerConnection.onicecandidate = e => {
+            if (!e.candidate) {
+                const answerStr = JSON.stringify(activePeerConnection.localDescription);
+                document.getElementById("txtRecvAnswer").value = btoa(answerStr);
+            }
+        };
 
-    const offer = JSON.parse(atob(rawOffer));
-    await activePeerConnection.setRemoteDescription(offer);
-    const answer = await activePeerConnection.createAnswer();
-    await activePeerConnection.setLocalDescription(answer);
+        await activePeerConnection.setRemoteDescription(offer);
+        const answer = await activePeerConnection.createAnswer();
+        await activePeerConnection.setLocalDescription(answer);
+    } catch (err) {
+        alert("Invalid offer token format: " + err.message);
+    }
 }
 
 // ==========================================
@@ -580,7 +609,7 @@ async function runSimulation() {
     log("Finalizing receiver and verifying bit-exact SHA-256 integrity anchor...");
     const finalRes = window.BadHub.finalizeReceiver();
 
-    if (finalRes.success) {
+    if (finalRes && finalRes.success) {
         statusEl.innerText = "Completed: 100% Bit-Exact Match!";
         verifiedEl.innerText = "SHA-256 VERIFIED";
         verifiedEl.className = "metric-value highlight-text";
@@ -590,7 +619,11 @@ async function runSimulation() {
         statusEl.innerText = "Failed";
         verifiedEl.innerText = "FAILED";
         verifiedEl.className = "metric-value color-danger";
-        log("RECOVERY FAILED: " + finalRes.error, "error");
+        log("RECOVERY FAILED: " + (finalRes ? finalRes.error : "unknown error"), "error");
+    }
+
+    if (window.BadHub && window.BadHub.resetSession) {
+        window.BadHub.resetSession();
     }
 
     btn.disabled = false;

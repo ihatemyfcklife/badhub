@@ -31,19 +31,30 @@ var (
 	currentRecv    *activeReceiverState
 )
 
+func safeJsFunc(fn func(this js.Value, args []js.Value) any) js.Func {
+	return js.FuncOf(func(this js.Value, args []js.Value) (res any) {
+		defer func() {
+			if r := recover(); r != nil {
+				res = jsError(fmt.Sprintf("panic: %v", r))
+			}
+		}()
+		return fn(this, args)
+	})
+}
+
 func main() {
 	hub := js.Global().Get("Object").New()
 
 	hub.Set("version", "1.0.0")
 	hub.Set("ready", true)
-	hub.Set("initSender", js.FuncOf(jsInitSender))
-	hub.Set("nextSenderFrame", js.FuncOf(jsNextSenderFrame))
-	hub.Set("getSenderStats", js.FuncOf(jsGetSenderStats))
-	hub.Set("initReceiver", js.FuncOf(jsInitReceiver))
-	hub.Set("ingestReceiverFrame", js.FuncOf(jsIngestReceiverFrame))
-	hub.Set("finalizeReceiver", js.FuncOf(jsFinalizeReceiver))
-	hub.Set("resetSession", js.FuncOf(jsResetSession))
-	hub.Set("deriveKeyHex", js.FuncOf(jsDeriveKeyHex))
+	hub.Set("initSender", safeJsFunc(jsInitSender))
+	hub.Set("nextSenderFrame", safeJsFunc(jsNextSenderFrame))
+	hub.Set("getSenderStats", safeJsFunc(jsGetSenderStats))
+	hub.Set("initReceiver", safeJsFunc(jsInitReceiver))
+	hub.Set("ingestReceiverFrame", safeJsFunc(jsIngestReceiverFrame))
+	hub.Set("finalizeReceiver", safeJsFunc(jsFinalizeReceiver))
+	hub.Set("resetSession", safeJsFunc(jsResetSession))
+	hub.Set("deriveKeyHex", safeJsFunc(jsDeriveKeyHex))
 
 	js.Global().Set("BadHub", hub)
 
@@ -72,6 +83,9 @@ func jsInitSender(this js.Value, args []js.Value) any {
 	}
 
 	fileLen := jsBytes.Get("length").Int()
+	if fileLen <= 0 {
+		return jsError("file is empty")
+	}
 	fileData := make([]byte, fileLen)
 	js.CopyBytesToGo(fileData, jsBytes)
 
@@ -105,6 +119,10 @@ func jsInitSender(this js.Value, args []js.Value) any {
 	}
 
 	stateMu.Lock()
+	if currentSender != nil {
+		currentSender.sender = nil
+		currentSender.meta = nil
+	}
 	currentSender = &activeSenderState{
 		sender: sender,
 		meta:   meta,
@@ -188,6 +206,9 @@ func jsInitReceiver(this js.Value, args []js.Value) any {
 	passphrase := args[1].String()
 
 	metaLen := jsMetaBytes.Get("length").Int()
+	if metaLen <= 0 {
+		return jsError("metadata is empty")
+	}
 	metaBytes := make([]byte, metaLen)
 	js.CopyBytesToGo(metaBytes, jsMetaBytes)
 
@@ -220,6 +241,14 @@ func jsInitReceiver(this js.Value, args []js.Value) any {
 	}
 
 	stateMu.Lock()
+	if currentRecv != nil {
+		if currentRecv.destBuf != nil {
+			currentRecv.destBuf.Reset()
+			currentRecv.destBuf = nil
+		}
+		currentRecv.receiver = nil
+		currentRecv.meta = nil
+	}
 	currentRecv = &activeReceiverState{
 		receiver: receiver,
 		meta:     &meta,
@@ -255,6 +284,9 @@ func jsIngestReceiverFrame(this js.Value, args []js.Value) any {
 
 	jsFrame := args[0]
 	frameLen := jsFrame.Get("length").Int()
+	if frameLen == 0 {
+		return jsError("frame is empty")
+	}
 	frame := make([]byte, frameLen)
 	js.CopyBytesToGo(frame, jsFrame)
 
@@ -304,14 +336,29 @@ func jsFinalizeReceiver(this js.Value, args []js.Value) any {
 	res.Set("checksum", hex.EncodeToString(r.meta.Checksum[:]))
 	res.Set("data", jsFile)
 
+	// Release internal buffer memory to let GC collect
+	r.destBuf.Reset()
+
 	return res
 }
 
 // jsResetSession()
 func jsResetSession(this js.Value, args []js.Value) any {
 	stateMu.Lock()
-	currentSender = nil
-	currentRecv = nil
+	if currentSender != nil {
+		currentSender.sender = nil
+		currentSender.meta = nil
+		currentSender = nil
+	}
+	if currentRecv != nil {
+		if currentRecv.destBuf != nil {
+			currentRecv.destBuf.Reset()
+			currentRecv.destBuf = nil
+		}
+		currentRecv.receiver = nil
+		currentRecv.meta = nil
+		currentRecv = nil
+	}
 	stateMu.Unlock()
 
 	res := js.Global().Get("Object").New()
