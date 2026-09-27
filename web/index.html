@@ -62,16 +62,54 @@
                 <h2>2. Transport & P2P Signaling</h2>
                 <div class="transport-selector">
                     <label class="radio-label">
-                        <input type="radio" name="sendTransport" value="broadcast" checked onchange="switchSendTransport(this.value)">
-                        <span>BroadcastChannel (Instant Same-Browser / Tab-to-Tab)</span>
+                        <input type="radio" name="sendTransport" value="magic" checked onchange="switchSendTransport(this.value)">
+                        <span>Magic Link & QR Code (Automated P2P)</span>
                     </label>
                     <label class="radio-label">
-                        <input type="radio" name="sendTransport" value="webrtc" onchange="switchSendTransport(this.value)">
-                        <span>WebRTC DataChannel (Direct Cross-Device Internet / LAN)</span>
+                        <input type="radio" name="sendTransport" value="broadcast" onchange="switchSendTransport(this.value)">
+                        <span>BroadcastChannel (Tab-to-Tab Local)</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="sendTransport" value="airgap" onchange="switchSendTransport(this.value)">
+                        <span>Manual Air-Gap (Offline SDP Tokens)</span>
                     </label>
                 </div>
 
-                <!-- WebRTC Signaling Box for Sender -->
+                <!-- Magic Link & QR Code Box for Sender -->
+                <div id="sendMagicBox" class="magic-box">
+                    <div class="share-box">
+                        <label>1-Click Magic Link</label>
+                        <div class="share-input-group">
+                            <input type="text" id="txtMagicLink" class="input-text font-mono" readonly placeholder="Select a file above to generate magic link...">
+                            <button class="btn btn-secondary" id="btnCopyMagicLink" onclick="copyMagicLink()">Copy Link</button>
+                        </div>
+                    </div>
+
+                    <div class="magic-extra-grid">
+                        <div class="room-code-badge">
+                            <span class="badge-label">Room Code</span>
+                            <span class="badge-code font-mono" id="sendRoomCodeBadge">-</span>
+                        </div>
+                        <div class="qr-trigger-box">
+                            <button class="btn btn-secondary" id="btnToggleQR" onclick="toggleQRCode()">Show QR Code</button>
+                        </div>
+                    </div>
+
+                    <!-- QR Code Display Box -->
+                    <div id="qrCodeContainer" class="qr-container hidden">
+                        <div class="qr-card">
+                            <div id="qrCodeCanvas" class="qr-canvas"></div>
+                            <p class="qr-help">Scan with a mobile camera to join and download directly</p>
+                        </div>
+                    </div>
+
+                    <div class="magic-peer-status" id="sendMagicPeerStatus">
+                        <span class="status-dot loading" id="sendPeerDot"></span>
+                        <span id="sendMagicPeerStatusText">Select a file above to arm your P2P room</span>
+                    </div>
+                </div>
+
+                <!-- WebRTC Signaling Box for Sender (Manual Air-Gap Mode) -->
                 <div id="sendWebRTCBox" class="webrtc-box hidden">
                     <p class="desc">1. Click "Generate Offer Token" and copy the token to your peer.</p>
                     <button class="btn btn-secondary" id="btnGenOffer" onclick="generateWebRTCOffer()">Generate Offer Token</button>
@@ -138,18 +176,39 @@
                         <label>Transport Mode</label>
                         <div class="transport-selector">
                             <label class="radio-label">
-                                <input type="radio" name="recvTransport" value="broadcast" checked onchange="switchRecvTransport(this.value)">
-                                <span>BroadcastChannel (Same-Browser Listener)</span>
+                                <input type="radio" name="recvTransport" value="magic" checked onchange="switchRecvTransport(this.value)">
+                                <span>Magic Link / Room Code (Automated P2P)</span>
                             </label>
                             <label class="radio-label">
-                                <input type="radio" name="recvTransport" value="webrtc" onchange="switchRecvTransport(this.value)">
-                                <span>WebRTC DataChannel (Cross-Device)</span>
+                                <input type="radio" name="recvTransport" value="broadcast" onchange="switchRecvTransport(this.value)">
+                                <span>BroadcastChannel (Tab-to-Tab Local)</span>
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="recvTransport" value="airgap" onchange="switchRecvTransport(this.value)">
+                                <span>Manual Air-Gap (Offline SDP Tokens)</span>
                             </label>
                         </div>
                     </div>
                 </div>
 
-                <!-- WebRTC Signaling Box for Receiver -->
+                <!-- Magic Connect Box for Receiver -->
+                <div id="recvMagicBox" class="magic-box">
+                    <div class="share-box">
+                        <label for="recvRoomCodeInput">Connect via Room Code</label>
+                        <div class="share-input-group">
+                            <input type="text" id="recvRoomCodeInput" class="input-text font-mono" placeholder="Enter room code, e.g. bad-7x9q2m">
+                            <button class="btn btn-primary" id="btnConnectRoom" onclick="connectToRoom()">Connect & Receive</button>
+                        </div>
+                        <small>If you opened a Magic Link or scanned a QR code, connection connects automatically.</small>
+                    </div>
+
+                    <div class="magic-peer-status" id="recvMagicPeerStatus">
+                        <span class="status-dot loading" id="recvPeerDot"></span>
+                        <span id="recvMagicPeerStatusText">Enter a Room Code or open a shared Magic Link</span>
+                    </div>
+                </div>
+
+                <!-- WebRTC Signaling Box for Receiver (Manual Air-Gap Mode) -->
                 <div id="recvWebRTCBox" class="webrtc-box hidden">
                     <p class="desc">1. Paste the Sender's Offer Token here:</p>
                     <textarea id="txtRecvOffer" class="code-area" placeholder="Paste sender's Offer token here..."></textarea>
@@ -159,7 +218,7 @@
                     <textarea id="txtRecvAnswer" class="code-area" placeholder="Answer token will appear here..." readonly></textarea>
                 </div>
 
-                <div class="action-bar">
+                <div class="action-bar" id="recvManualActionBar">
                     <button class="btn btn-primary" id="btnStartRecv" onclick="startReceiving()">Start Listening for Incoming Stream</button>
                     <button class="btn btn-danger" id="btnStopRecv" onclick="stopReceiving()" disabled>Stop</button>
                 </div>
@@ -285,8 +344,10 @@
         </footer>
     </div>
 
-    <!-- Go WebAssembly Execution Bridge -->
+    <!-- Client-Side Libraries & Execution Bridge -->
     <script src="wasm_exec.js"></script>
+    <script src="qrcode.min.js"></script>
+    <script src="peerjs.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

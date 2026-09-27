@@ -44,6 +44,7 @@ async function initWasm() {
             statusDot.className = "status-dot ready";
             statusText.innerText = "Engine Ready (WASM v" + window.BadHub.version + ")";
             checkSenderReady();
+            checkUrlHash();
         } else {
             throw new Error("BadHub global bridge was not registered");
         }
@@ -71,6 +72,12 @@ function switchTab(tab) {
     }
 }
 
+// Magic Link & Ephemeral Signaling State
+let currentRoomId = "";
+let senderPeer = null;
+let receiverPeer = null;
+let activePeerConn = null;
+
 // Slider update helpers
 function updateRedundancy(val) {
     document.getElementById("redundancyVal").innerText = val + "%";
@@ -80,22 +87,285 @@ function updateSimLoss(val) {
     document.getElementById("simLossVal").innerText = val + "%";
 }
 
-// Transport mode toggles
-function switchSendTransport(mode) {
-    const box = document.getElementById("sendWebRTCBox");
-    if (mode === "webrtc") {
+// Room & Passphrase Generation
+function generateRoomId() {
+    const chars = "abcdefghjkmnpqrstuvwxyz23456789";
+    let code = "bad-";
+    for (let i = 0; i < 6; i++) {
+        code += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return code;
+}
+
+function generateRandomPassphrase() {
+    const chars = "abcdefghjkmnpqrstuvwxyz23456789";
+    let pass = "";
+    for (let i = 0; i < 16; i++) {
+        pass += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return pass;
+}
+
+function updateMagicLink(roomId) {
+    if (!roomId) return;
+    const passphrase = document.getElementById("sendPassphrase").value || "badhub-secure-swarm-v1";
+    const baseUrl = window.location.origin + window.location.pathname;
+    const magicUrl = `${baseUrl}#room=${encodeURIComponent(roomId)}&key=${encodeURIComponent(passphrase)}`;
+
+    const txt = document.getElementById("txtMagicLink");
+    if (txt) txt.value = magicUrl;
+
+    const badge = document.getElementById("sendRoomCodeBadge");
+    if (badge) badge.innerText = roomId;
+
+    renderQRCode(magicUrl);
+}
+
+function renderQRCode(text) {
+    const container = document.getElementById("qrCodeCanvas");
+    if (!container || typeof qrcode === "undefined") return;
+    try {
+        const qr = qrcode(0, "M");
+        qr.addData(text);
+        qr.make();
+        container.innerHTML = qr.createSvgTag(5, 0);
+    } catch (err) {
+        console.error("QR Code error:", err);
+    }
+}
+
+function toggleQRCode() {
+    const box = document.getElementById("qrCodeContainer");
+    const btn = document.getElementById("btnToggleQR");
+    if (!box) return;
+    if (box.classList.contains("hidden")) {
         box.classList.remove("hidden");
+        if (btn) btn.innerText = "Hide QR Code";
     } else {
         box.classList.add("hidden");
+        if (btn) btn.innerText = "Show QR Code";
+    }
+}
+
+function copyMagicLink() {
+    const txt = document.getElementById("txtMagicLink");
+    const btn = document.getElementById("btnCopyMagicLink");
+    if (!txt || !txt.value) {
+        alert("Please select a file first to generate a link.");
+        return;
+    }
+    navigator.clipboard.writeText(txt.value).then(() => {
+        if (btn) {
+            const originalText = btn.innerText;
+            btn.innerText = "Copied!";
+            btn.classList.add("btn-success");
+            setTimeout(() => {
+                btn.innerText = originalText;
+                btn.classList.remove("btn-success");
+            }, 2000);
+        }
+    }).catch(() => {
+        txt.select();
+        document.execCommand("copy");
+    });
+}
+
+// Transport mode toggles
+function switchSendTransport(mode) {
+    const magicBox = document.getElementById("sendMagicBox");
+    const webrtcBox = document.getElementById("sendWebRTCBox");
+
+    if (mode === "magic") {
+        if (magicBox) magicBox.classList.remove("hidden");
+        if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (selectedFileData && currentRoomId && !senderPeer) {
+            armSenderRoom(currentRoomId);
+        }
+    } else if (mode === "airgap") {
+        if (magicBox) magicBox.classList.add("hidden");
+        if (webrtcBox) webrtcBox.classList.remove("hidden");
+    } else {
+        // broadcast
+        if (magicBox) magicBox.classList.add("hidden");
+        if (webrtcBox) webrtcBox.classList.add("hidden");
     }
 }
 
 function switchRecvTransport(mode) {
-    const box = document.getElementById("recvWebRTCBox");
-    if (mode === "webrtc") {
-        box.classList.remove("hidden");
+    const magicBox = document.getElementById("recvMagicBox");
+    const webrtcBox = document.getElementById("recvWebRTCBox");
+    const manualBar = document.getElementById("recvManualActionBar");
+
+    if (mode === "magic") {
+        if (magicBox) magicBox.classList.remove("hidden");
+        if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (manualBar) manualBar.classList.add("hidden");
+    } else if (mode === "airgap") {
+        if (magicBox) magicBox.classList.add("hidden");
+        if (webrtcBox) webrtcBox.classList.remove("hidden");
+        if (manualBar) manualBar.classList.remove("hidden");
     } else {
-        box.classList.add("hidden");
+        // broadcast
+        if (magicBox) magicBox.classList.add("hidden");
+        if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (manualBar) manualBar.classList.remove("hidden");
+    }
+}
+
+// Automated PeerJS Sender Room Arming
+function armSenderRoom(roomId) {
+    if (typeof Peer === "undefined") {
+        console.warn("PeerJS library not loaded");
+        return;
+    }
+    if (senderPeer) {
+        senderPeer.destroy();
+        senderPeer = null;
+    }
+
+    const statusText = document.getElementById("sendMagicPeerStatusText");
+    const statusDot = document.getElementById("sendPeerDot");
+    if (statusDot) statusDot.className = "status-dot loading";
+    if (statusText) statusText.innerText = `Arming room ${roomId}...`;
+
+    try {
+        senderPeer = new Peer(roomId, {
+            debug: 1
+        });
+
+        senderPeer.on("open", (id) => {
+            if (statusDot) statusDot.className = "status-dot loading";
+            if (statusText) statusText.innerText = `Room ${id} active. Waiting for recipient to connect...`;
+        });
+
+        senderPeer.on("connection", (conn) => {
+            console.log("Recipient connected to sender room!");
+            activePeerConn = conn;
+            if (statusDot) statusDot.className = "status-dot ready";
+            if (statusText) statusText.innerText = "Peer connected! Starting transmission...";
+
+            conn.on("open", () => {
+                activeDataChannel = conn.dataChannel;
+                activeDataChannel.binaryType = "arraybuffer";
+                startSending();
+            });
+
+            conn.on("close", () => {
+                if (statusDot) statusDot.className = "status-dot loading";
+                if (statusText) statusText.innerText = "Peer disconnected. Waiting for next recipient...";
+            });
+        });
+
+        senderPeer.on("error", (err) => {
+            console.warn("Sender PeerJS error:", err);
+            if (err.type === "unavailable-id") {
+                currentRoomId = generateRoomId();
+                updateMagicLink(currentRoomId);
+                armSenderRoom(currentRoomId);
+            } else {
+                if (statusDot) statusDot.className = "status-dot error";
+                if (statusText) statusText.innerText = "Signaling error: " + err.type;
+            }
+        });
+    } catch (err) {
+        console.error("Failed to arm sender room:", err);
+    }
+}
+
+// Automated PeerJS Receiver Connection
+function connectToRoom(roomId) {
+    if (!roomId) {
+        roomId = document.getElementById("recvRoomCodeInput").value.trim();
+    }
+    if (!roomId) {
+        alert("Please enter a room code or click a magic link.");
+        return;
+    }
+
+    if (typeof Peer === "undefined") {
+        alert("PeerJS is not loaded. Please check your connection.");
+        return;
+    }
+
+    if (receiverPeer) {
+        receiverPeer.destroy();
+        receiverPeer = null;
+    }
+
+    const statusText = document.getElementById("recvMagicPeerStatusText");
+    const statusDot = document.getElementById("recvPeerDot");
+    if (statusDot) statusDot.className = "status-dot loading";
+    if (statusText) statusText.innerText = `Connecting to room ${roomId}...`;
+
+    try {
+        receiverPeer = new Peer({ debug: 1 });
+
+        receiverPeer.on("open", () => {
+            const conn = receiverPeer.connect(roomId, {
+                reliable: false, // UDP mode: unordered, unreliable for RLNC
+                serialization: "raw"
+            });
+
+            conn.on("open", () => {
+                if (statusDot) statusDot.className = "status-dot ready";
+                if (statusText) statusText.innerText = `Connected to room ${roomId}! Receiving stream...`;
+                activeDataChannel = conn.dataChannel;
+                activeDataChannel.binaryType = "arraybuffer";
+                startReceiving();
+            });
+
+            conn.on("close", () => {
+                if (statusDot) statusDot.className = "status-dot";
+                if (statusText) statusText.innerText = "Connection closed.";
+            });
+
+            conn.on("error", (err) => {
+                if (statusDot) statusDot.className = "status-dot error";
+                if (statusText) statusText.innerText = "Connection error: " + err.message;
+            });
+        });
+
+        receiverPeer.on("error", (err) => {
+            console.warn("Receiver PeerJS error:", err);
+            if (statusDot) statusDot.className = "status-dot error";
+            if (statusText) statusText.innerText = "Signaling: " + (err.type === "peer-unavailable" ? "Sender room not found or offline" : err.type);
+        });
+    } catch (err) {
+        console.error("Failed to connect to room:", err);
+    }
+}
+
+// URL Hash Deep Linking (#room=...&key=...)
+function checkUrlHash() {
+    const rawHash = window.location.hash.substring(1);
+    if (!rawHash) return;
+
+    const params = new URLSearchParams(rawHash);
+    const room = params.get("room");
+    const key = params.get("key");
+
+    if (room) {
+        switchTab("recv");
+        const radio = document.querySelector('input[name="recvTransport"][value="magic"]');
+        if (radio) {
+            radio.checked = true;
+            switchRecvTransport("magic");
+        }
+        const roomInput = document.getElementById("recvRoomCodeInput");
+        if (roomInput) roomInput.value = room;
+        if (key) {
+            const passInput = document.getElementById("recvPassphrase");
+            if (passInput) passInput.value = key;
+        }
+
+        const tryAutoConnect = () => {
+            if (window.BadHub && window.BadHub.ready) {
+                connectToRoom(room);
+            } else {
+                setTimeout(tryAutoConnect, 100);
+            }
+        };
+        tryAutoConnect();
     }
 }
 
@@ -133,6 +403,17 @@ function handleFileSelect(file) {
     selectedFile = file;
     document.getElementById("dropTitle").innerText = `Selected: ${file.name} (${formatBytes(file.size)})`;
     document.getElementById("dropSubtitle").innerText = "Reading file into WebAssembly memory...";
+
+    if (!currentRoomId) {
+        currentRoomId = generateRoomId();
+        document.getElementById("sendPassphrase").value = generateRandomPassphrase();
+    }
+    updateMagicLink(currentRoomId);
+
+    const transportRadio = document.querySelector('input[name="sendTransport"]:checked');
+    if (transportRadio && transportRadio.value === "magic") {
+        armSenderRoom(currentRoomId);
+    }
 
     const reader = new FileReader();
     reader.onload = e => {
@@ -206,7 +487,7 @@ async function startSending() {
     } else {
         // WebRTC DataChannel
         if (!activeDataChannel || activeDataChannel.readyState !== "open") {
-            alert("WebRTC DataChannel is not open! Please generate and exchange offer/answer tokens first.");
+            alert("WebRTC DataChannel is not open! Please share your Magic Link / QR Code or connect your peer first.");
             stopTransmission();
             return;
         }
@@ -640,4 +921,13 @@ function formatBytes(bytes, decimals = 1) {
 }
 
 // Bootstrap on window load
-window.addEventListener("DOMContentLoaded", initWasm);
+window.addEventListener("DOMContentLoaded", () => {
+    initWasm();
+    window.addEventListener("hashchange", checkUrlHash);
+    const passInput = document.getElementById("sendPassphrase");
+    if (passInput) {
+        passInput.addEventListener("input", () => {
+            if (currentRoomId) updateMagicLink(currentRoomId);
+        });
+    }
+});
