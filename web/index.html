@@ -66,6 +66,10 @@
                         <span>Magic Link & QR Code (Automated P2P)</span>
                     </label>
                     <label class="radio-label">
+                        <input type="radio" name="sendTransport" value="nostr" onchange="switchSendTransport(this.value)">
+                        <span>Decentralized Relays (Nostr - Zero IP Exposure)</span>
+                    </label>
+                    <label class="radio-label">
                         <input type="radio" name="sendTransport" value="broadcast" onchange="switchSendTransport(this.value)">
                         <span>BroadcastChannel (Tab-to-Tab Local)</span>
                     </label>
@@ -208,6 +212,10 @@
                             <label class="radio-label">
                                 <input type="radio" name="recvTransport" value="magic" checked onchange="switchRecvTransport(this.value)">
                                 <span>Magic Link / Room Code (Automated P2P)</span>
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="recvTransport" value="nostr" onchange="switchRecvTransport(this.value)">
+                                <span>Decentralized Relays (Nostr - Zero IP Exposure)</span>
                             </label>
                             <label class="radio-label">
                                 <input type="radio" name="recvTransport" value="broadcast" onchange="switchRecvTransport(this.value)">
@@ -408,6 +416,7 @@
     <script src="wasm_exec.js"></script>
     <script src="qrcode.min.js"></script>
     <script src="peerjs.min.js"></script>
+    <script src="nostr.bundle.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

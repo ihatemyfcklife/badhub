@@ -93,7 +93,15 @@ To ensure total network-level anonymity in addition to content encryption:
 - All encrypted frames transit through a blind TURN relay (preconfigured with the Open Relay Project by Metered on ports 80/443, with support for custom CoTURN instances).
 - Magic links automatically pass `&relay=1` so recipients join with IP masking automatically enabled.
 
-### 8. Mobile & Multi-Screen Responsive UI
+### 8. Decentralized Relays (Nostr - Zero IP Exposure)
+For users requiring zero direct IP exposure and zero single-relay dependency without the heavy latency of Tor:
+- BadHub integrates a 100% automated **Decentralized Relays (Nostr)** transport mode.
+- Shards encrypted with ChaCha20-Poly1305 are encapsulated into signed **ephemeral Nostr events** (NIP-01/NIP-16 `kind: 20001`) signed via BIP-340 Schnorr with ephemeral session keys.
+- Relays (e.g. `relay.damus.io`, `nos.lol`, `nostr.mom`) are strictly forbidden by NIP-16 from writing ephemeral events to persistent storage; they forward packets purely in memory in real time.
+- Sender and receiver never connect directly, never contact STUN/TURN, and never exchange ICE candidates, eliminating any mutual IP exposure.
+- 100% automated: no account, no extension, and no private key setup required.
+
+### 9. Mobile & Multi-Screen Responsive UI
 - Fluid clamp typography and dynamic layout adaptation for screens down to 320px width.
 - Touch-friendly 44px minimum target sizes and iOS Safari auto-zoom prevention (`font-size: 16px` inputs).
 - Throttled DOM updates and event loop yielding for sustained line-rate throughput on mobile hardware.
@@ -115,9 +123,10 @@ badhub/
 ├── web/
 │   ├── index.html            # Responsive cyberpunk interface
 │   ├── style.css             # Zero-dependency responsive dark stylesheet
-│   ├── app.js                # WebRTC, PeerJS, TURN relay & WASM lifecycle controller
+│   ├── app.js                # WebRTC, PeerJS, TURN relay, Nostr swarm & WASM controller
 │   ├── wasm_exec.js          # Go 1.24 WebAssembly runtime bridge
 │   ├── qrcode.min.js         # Pure client-side SVG QR code generator
+│   ├── nostr.bundle.js       # Lightweight Nostr client library with BIP-340 Schnorr
 │   └── main.wasm             # Optimized WebAssembly binary (3.4 MB)
 ├── scripts/
 │   ├── build.sh              # WebAssembly compilation script

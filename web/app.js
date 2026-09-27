@@ -109,10 +109,14 @@ function generateRandomPassphrase() {
 function updateMagicLink(roomId) {
     if (!roomId) return;
     const passphrase = document.getElementById("sendPassphrase").value || "badhub-secure-swarm-v1";
+    const transport = document.querySelector('input[name="sendTransport"]:checked')?.value || "magic";
     const isRelay = document.getElementById("sendRelayToggle")?.checked || false;
     const baseUrl = window.location.origin + window.location.pathname;
+
     let magicUrl = `${baseUrl}#room=${encodeURIComponent(roomId)}&key=${encodeURIComponent(passphrase)}`;
-    if (isRelay) {
+    if (transport === "nostr") {
+        magicUrl += "&transport=nostr";
+    } else if (isRelay) {
         magicUrl += "&relay=1";
     }
 
@@ -178,41 +182,72 @@ function copyMagicLink() {
 function switchSendTransport(mode) {
     const magicBox = document.getElementById("sendMagicBox");
     const webrtcBox = document.getElementById("sendWebRTCBox");
+    const privacyBox = document.querySelector("#contentSend .privacy-box");
 
     if (mode === "magic") {
         if (magicBox) magicBox.classList.remove("hidden");
         if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (privacyBox) privacyBox.classList.remove("hidden");
+        if (activeNostrSenderSub) { activeNostrSenderSub.unsub(); activeNostrSenderSub = null; }
         if (selectedFileData && currentRoomId && !senderPeer) {
             armSenderRoom(currentRoomId);
+        }
+    } else if (mode === "nostr") {
+        if (magicBox) magicBox.classList.remove("hidden");
+        if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (privacyBox) privacyBox.classList.add("hidden");
+        if (senderPeer) { senderPeer.destroy(); senderPeer = null; }
+        if (selectedFileData && currentRoomId) {
+            armSenderNostrRoom(currentRoomId);
         }
     } else if (mode === "airgap") {
         if (magicBox) magicBox.classList.add("hidden");
         if (webrtcBox) webrtcBox.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.remove("hidden");
+        if (senderPeer) { senderPeer.destroy(); senderPeer = null; }
+        if (activeNostrSenderSub) { activeNostrSenderSub.unsub(); activeNostrSenderSub = null; }
     } else {
         // broadcast
         if (magicBox) magicBox.classList.add("hidden");
         if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (privacyBox) privacyBox.classList.add("hidden");
+        if (senderPeer) { senderPeer.destroy(); senderPeer = null; }
+        if (activeNostrSenderSub) { activeNostrSenderSub.unsub(); activeNostrSenderSub = null; }
     }
+    if (currentRoomId) updateMagicLink(currentRoomId);
 }
 
 function switchRecvTransport(mode) {
     const magicBox = document.getElementById("recvMagicBox");
     const webrtcBox = document.getElementById("recvWebRTCBox");
     const manualBar = document.getElementById("recvManualActionBar");
+    const privacyBox = document.querySelector("#contentRecv .privacy-box");
 
     if (mode === "magic") {
         if (magicBox) magicBox.classList.remove("hidden");
         if (webrtcBox) webrtcBox.classList.add("hidden");
         if (manualBar) manualBar.classList.add("hidden");
+        if (privacyBox) privacyBox.classList.remove("hidden");
+        if (activeNostrReceiverSub) { activeNostrReceiverSub.unsub(); activeNostrReceiverSub = null; }
+    } else if (mode === "nostr") {
+        if (magicBox) magicBox.classList.remove("hidden");
+        if (webrtcBox) webrtcBox.classList.add("hidden");
+        if (manualBar) manualBar.classList.add("hidden");
+        if (privacyBox) privacyBox.classList.add("hidden");
+        if (receiverPeer) { receiverPeer.destroy(); receiverPeer = null; }
     } else if (mode === "airgap") {
         if (magicBox) magicBox.classList.add("hidden");
         if (webrtcBox) webrtcBox.classList.remove("hidden");
         if (manualBar) manualBar.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.remove("hidden");
+        if (activeNostrReceiverSub) { activeNostrReceiverSub.unsub(); activeNostrReceiverSub = null; }
     } else {
         // broadcast
         if (magicBox) magicBox.classList.add("hidden");
         if (webrtcBox) webrtcBox.classList.add("hidden");
         if (manualBar) manualBar.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.add("hidden");
+        if (activeNostrReceiverSub) { activeNostrReceiverSub.unsub(); activeNostrReceiverSub = null; }
     }
 }
 
@@ -322,6 +357,156 @@ function onCustomTurnChange(prefix) {
     }
 }
 
+// ==========================================
+// DECENTRALIZED NOSTR RELAYS CONFIGURATION
+// ==========================================
+
+const NOSTR_RELAYS = [
+    "wss://relay.damus.io",
+    "wss://nos.lol",
+    "wss://nostr.mom"
+];
+
+let nostrPool = null;
+let senderNostrPrivKey = null;
+let activeNostrSenderSub = null;
+let activeNostrReceiverSub = null;
+let activeNostrPacketHandler = null;
+
+function getNostrPool() {
+    if (!nostrPool && typeof window.NostrTools !== "undefined") {
+        nostrPool = new window.NostrTools.SimplePool();
+    }
+    return nostrPool;
+}
+
+// Automated Nostr Sender Swarm Arming
+async function armSenderNostrRoom(roomId) {
+    if (typeof window.NostrTools === "undefined") {
+        console.warn("NostrTools not loaded");
+        return;
+    }
+    const pool = getNostrPool();
+    if (!pool) return;
+
+    if (!senderNostrPrivKey) {
+        senderNostrPrivKey = window.NostrTools.generatePrivateKey();
+    }
+
+    if (activeNostrSenderSub) {
+        activeNostrSenderSub.unsub();
+        activeNostrSenderSub = null;
+    }
+
+    const statusText = document.getElementById("sendMagicPeerStatusText");
+    const statusDot = document.getElementById("sendPeerDot");
+    if (statusDot) statusDot.className = "status-dot loading";
+    if (statusText) statusText.innerText = `Arming Nostr swarm on room ${roomId}...`;
+
+    try {
+        activeNostrSenderSub = pool.sub(NOSTR_RELAYS, [
+            {
+                kinds: [20001],
+                "#d": [roomId],
+                "#t": ["badhub-signal"]
+            }
+        ]);
+
+        if (statusDot) statusDot.className = "status-dot loading";
+        if (statusText) statusText.innerText = `Nostr swarm active on room ${roomId}. Waiting for recipient...`;
+
+        const btnStart = document.getElementById("btnStartSend");
+        if (btnStart && selectedFileData) btnStart.disabled = false;
+
+        activeNostrSenderSub.on("event", event => {
+            if (event.content === "join" && !isTransmitting && selectedFileData) {
+                console.log("Recipient joined Nostr room!");
+                if (statusDot) statusDot.className = "status-dot ready";
+                if (statusText) statusText.innerText = "Recipient connected via Nostr! Streaming encrypted frames...";
+                startSending();
+            }
+        });
+    } catch (err) {
+        console.error("Failed to arm Nostr sender swarm:", err);
+    }
+}
+
+// Automated Nostr Receiver Connection
+async function connectToNostrRoom(roomId) {
+    if (!roomId) {
+        roomId = document.getElementById("recvRoomCodeInput").value.trim();
+    }
+    if (!roomId) {
+        alert("Please enter a room code or click a magic link.");
+        return;
+    }
+
+    if (typeof window.NostrTools === "undefined") {
+        alert("Nostr library not loaded. Please check your connection.");
+        return;
+    }
+    const pool = getNostrPool();
+    if (!pool) return;
+
+    if (activeNostrReceiverSub) {
+        activeNostrReceiverSub.unsub();
+        activeNostrReceiverSub = null;
+    }
+
+    const statusText = document.getElementById("recvMagicPeerStatusText");
+    const statusDot = document.getElementById("recvPeerDot");
+    if (statusDot) statusDot.className = "status-dot loading";
+    if (statusText) statusText.innerText = `Connecting to Nostr swarm for room ${roomId}...`;
+
+    try {
+        // Ephemeral join signal to inform sender
+        const joinSk = window.NostrTools.generatePrivateKey();
+        const joinEvent = window.NostrTools.finishEvent({
+            kind: 20001,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [
+                ["d", roomId],
+                ["t", "badhub-signal"]
+            ],
+            content: "join"
+        }, joinSk);
+
+        pool.publish(NOSTR_RELAYS, joinEvent);
+
+        // Subscribe to all room frames and metadata
+        activeNostrReceiverSub = pool.sub(NOSTR_RELAYS, [
+            {
+                kinds: [20001],
+                "#d": [roomId]
+            }
+        ]);
+
+        if (statusDot) statusDot.className = "status-dot ready";
+        if (statusText) statusText.innerText = `Connected to Nostr swarm for room ${roomId}! Receiving stream...`;
+
+        startReceiving();
+
+        activeNostrReceiverSub.on("event", event => {
+            if (!isReceiving || !activeNostrPacketHandler) return;
+            const isSignal = event.tags && event.tags.some(t => t[0] === "t" && t[1] === "badhub-signal");
+            if (isSignal) return;
+
+            try {
+                const binaryStr = atob(event.content);
+                const frameBytes = new Uint8Array(binaryStr.length);
+                for (let i = 0; i < binaryStr.length; i++) {
+                    frameBytes[i] = binaryStr.charCodeAt(i);
+                }
+                activeNostrPacketHandler(frameBytes);
+            } catch (err) {
+                console.warn("Failed to process incoming Nostr frame:", err);
+            }
+        });
+    } catch (err) {
+        console.error("Failed to connect to Nostr swarm:", err);
+    }
+}
+
 // Automated PeerJS Sender Room Arming
 function armSenderRoom(roomId) {
     if (typeof Peer === "undefined") {
@@ -391,6 +576,11 @@ function connectToRoom(roomId) {
         return;
     }
 
+    const transport = document.querySelector('input[name="recvTransport"]:checked')?.value || "magic";
+    if (transport === "nostr") {
+        return connectToNostrRoom(roomId);
+    }
+
     if (typeof Peer === "undefined") {
         alert("PeerJS is not loaded. Please check your connection.");
         return;
@@ -454,6 +644,7 @@ function checkUrlHash() {
     const room = params.get("room");
     const key = params.get("key");
     const relay = params.get("relay");
+    const transport = params.get("transport");
 
     if (relay === "1") {
         const recvToggle = document.getElementById("recvRelayToggle");
@@ -465,10 +656,18 @@ function checkUrlHash() {
 
     if (room) {
         switchTab("recv");
-        const radio = document.querySelector('input[name="recvTransport"][value="magic"]');
-        if (radio) {
-            radio.checked = true;
-            switchRecvTransport("magic");
+        if (transport === "nostr") {
+            const nostrRadio = document.querySelector('input[name="recvTransport"][value="nostr"]');
+            if (nostrRadio) {
+                nostrRadio.checked = true;
+                switchRecvTransport("nostr");
+            }
+        } else {
+            const radio = document.querySelector('input[name="recvTransport"][value="magic"]');
+            if (radio) {
+                radio.checked = true;
+                switchRecvTransport("magic");
+            }
         }
         const roomInput = document.getElementById("recvRoomCodeInput");
         if (roomInput) roomInput.value = room;
@@ -532,6 +731,8 @@ function handleFileSelect(file) {
     const transportRadio = document.querySelector('input[name="sendTransport"]:checked');
     if (transportRadio && transportRadio.value === "magic") {
         armSenderRoom(currentRoomId);
+    } else if (transportRadio && transportRadio.value === "nostr") {
+        armSenderNostrRoom(currentRoomId);
     }
 
     const reader = new FileReader();
@@ -603,6 +804,43 @@ async function startSending() {
             activeBroadcastChannel.postMessage({ type: "meta", data: res.encryptedMetadata });
             await new Promise(r => setTimeout(r, 10));
         }
+    } else if (transport === "nostr") {
+        const pool = getNostrPool();
+        if (!pool) {
+            alert("Nostr engine is not loaded. Please check your connection.");
+            stopTransmission();
+            return;
+        }
+        if (!senderNostrPrivKey && typeof window.NostrTools !== "undefined") {
+            senderNostrPrivKey = window.NostrTools.generatePrivateKey();
+        }
+
+        sendWirePacket = async (packet, isMeta = false) => {
+            let binary = "";
+            const len = packet.byteLength;
+            for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(packet[i]);
+            }
+            const b64 = btoa(binary);
+
+            const ev = window.NostrTools.finishEvent({
+                kind: 20001,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [
+                    ["d", currentRoomId],
+                    ["t", isMeta ? "badhub-meta" : "badhub-frame"]
+                ],
+                content: b64
+            }, senderNostrPrivKey);
+
+            pool.publish(NOSTR_RELAYS, ev);
+        };
+
+        // Emit encrypted metadata packet 5 times over Nostr swarm
+        for (let i = 0; i < 5; i++) {
+            await sendWirePacket(res.encryptedMetadata, true);
+            await new Promise(r => setTimeout(r, 25));
+        }
     } else {
         // WebRTC DataChannel
         if (!activeDataChannel || activeDataChannel.readyState !== "open") {
@@ -653,6 +891,13 @@ async function startSending() {
             bytesSent += frameRes.frame.length;
             frameCount++;
 
+            if (transport === "nostr") {
+                // Yield periodically to allow WebSocket frames to flush across relays
+                if (frameCount % 4 === 0) {
+                    await new Promise(r => setTimeout(r, 10));
+                }
+            }
+
             if (frameCount % 32 === 0) {
                 const stats = window.BadHub.getSenderStats();
                 dataEl.innerText = stats.dataPackets;
@@ -687,6 +932,10 @@ function stopTransmission() {
     document.getElementById("btnStopSend").disabled = true;
     document.getElementById("btnStartSend").disabled = false;
     document.getElementById("sendMetricStatus").innerText = "Stopped";
+    if (activeNostrSenderSub) {
+        activeNostrSenderSub.unsub();
+        activeNostrSenderSub = null;
+    }
     if (window.BadHub && window.BadHub.resetSession) {
         window.BadHub.resetSession();
     }
@@ -788,6 +1037,8 @@ function startReceiving() {
                 onIncomingWirePacket(e.data.data);
             }
         };
+    } else if (transport === "nostr") {
+        activeNostrPacketHandler = onIncomingWirePacket;
     } else {
         // WebRTC DataChannel
         if (activeDataChannel) {
@@ -802,6 +1053,10 @@ function stopReceiving() {
     isReceiving = false;
     document.getElementById("btnStopRecv").disabled = true;
     document.getElementById("btnStartRecv").disabled = false;
+    if (activeNostrReceiverSub) {
+        activeNostrReceiverSub.unsub();
+        activeNostrReceiverSub = null;
+    }
     if (window.BadHub && window.BadHub.resetSession) {
         window.BadHub.resetSession();
     }
