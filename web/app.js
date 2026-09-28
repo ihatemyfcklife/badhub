@@ -2231,7 +2231,7 @@ function handleMediaFileSelected(file) {
 }
 
 // ------------------------------------------
-// BROADCASTER LOGIC (Diffuser un Media)
+// BROADCASTER LOGIC (Stream Media)
 // ------------------------------------------
 
 async function startMediaBroadcast() {
@@ -2477,7 +2477,7 @@ function stopMediaBroadcast() {
 }
 
 // ------------------------------------------
-// VIEWER / PLAYBACK LOGIC (Visionner en Direct)
+// VIEWER / PLAYBACK LOGIC (Watch Live Stream)
 // ------------------------------------------
 
 async function startStreamingPlayback(customParam) {
