@@ -6,9 +6,9 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <link rel="icon" type="image/svg+xml" href="favicon.svg?v=1.9.1">
-    <link rel="alternate icon" type="image/png" href="favicon.png?v=1.9.1">
-    <link rel="stylesheet" href="style.css?v=1.9.1">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg?v=1.9.2">
+    <link rel="alternate icon" type="image/png" href="favicon.png?v=1.9.2">
+    <link rel="stylesheet" href="style.css?v=1.9.2">
 </head>
 <body>
     <div class="app-container">
@@ -549,12 +549,14 @@
                     <div class="magic-link-box">
                         <input type="text" id="mediaStreamLinkInput" class="input-text font-mono" readonly>
                         <button class="btn btn-secondary" onclick="copyMediaStreamLink()">Copy Stream Link</button>
-                        <button class="btn btn-secondary" onclick="toggleMediaQr()">QR Code</button>
+                        <button class="btn btn-secondary" id="btnToggleMediaQR" onclick="toggleMediaQr()">Show QR Code</button>
                     </div>
 
                     <div id="mediaQrContainer" class="qr-container hidden">
-                        <div id="mediaQrCode"></div>
-                        <p class="qr-desc">Scan to watch the live stream directly on mobile.</p>
+                        <div class="qr-card">
+                            <div id="mediaQrCode" class="qr-canvas"></div>
+                            <p class="qr-help">Scan with a mobile camera to watch the stream directly</p>
+                        </div>
                     </div>
 
                     <!-- Broadcast Telemetry -->
@@ -689,10 +691,10 @@
     </div>
 
     <!-- Client-Side Libraries & Execution Bridge -->
-    <script src="wasm_exec.js?v=1.9.1"></script>
-    <script src="qrcode.min.js?v=1.9.1"></script>
-    <script src="peerjs.min.js?v=1.9.1"></script>
-    <script src="nostr.bundle.js?v=1.9.1"></script>
-    <script src="app.js?v=1.9.1"></script>
+    <script src="wasm_exec.js?v=1.9.2"></script>
+    <script src="qrcode.min.js?v=1.9.2"></script>
+    <script src="peerjs.min.js?v=1.9.2"></script>
+    <script src="nostr.bundle.js?v=1.9.2"></script>
+    <script src="app.js?v=1.9.2"></script>
 </body>
 </html>

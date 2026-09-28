@@ -44,7 +44,7 @@ async function initWasm() {
     const go = new Go();
 
     try {
-        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.9.1"), go.importObject);
+        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.9.2"), go.importObject);
         go.run(result.instance);
 
         // Await BadHub global bridge initialization
@@ -56,7 +56,7 @@ async function initWasm() {
 
         if (window.BadHub && window.BadHub.ready) {
             statusDot.className = "status-dot ready";
-            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.9.1";
+            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.9.2";
             statusText.innerText = "Engine Ready (" + ver + ")";
             checkSenderReady();
             checkUrlHash();
@@ -75,7 +75,7 @@ async function fetchGitHubBadHubVersion() {
     try {
         // 1. Check static version.json first (instant, unaffected by GitHub API rate limits)
         try {
-            const localResp = await fetch("version.json?v=1.9.1");
+            const localResp = await fetch("version.json?v=1.9.2");
             if (localResp.ok) {
                 const localData = await localResp.json();
                 if (localData && localData.version) {
@@ -1261,20 +1261,11 @@ async function uploadToBlossom(passphrase) {
         if (linkInput) linkInput.value = blossomLink;
 
         // Render QR Code for Blossom link
-        const qrCanvas = document.getElementById("qrCodeCanvas");
+        renderQRCode(blossomLink);
         const qrContainer = document.getElementById("qrCodeContainer");
-        if (qrCanvas && typeof window.QRCode !== "undefined") {
-            qrCanvas.innerHTML = "";
-            new window.QRCode(qrCanvas, {
-                text: blossomLink,
-                width: 180,
-                height: 180,
-                colorDark: "#10b981",
-                colorLight: "#0f172a",
-                correctLevel: window.QRCode.CorrectLevel.M
-            });
-            if (qrContainer) qrContainer.classList.remove("hidden");
-        }
+        if (qrContainer) qrContainer.classList.remove("hidden");
+        const btnToggle = document.getElementById("btnToggleQR");
+        if (btnToggle) btnToggle.innerText = "Hide QR Code";
 
         document.getElementById("btnStopSend").disabled = true;
         document.getElementById("btnStartSend").disabled = false;
@@ -2598,18 +2589,26 @@ async function broadcastViaBlossom(passphrase) {
 }
 
 function renderMediaQr(text) {
-    const qrDiv = document.getElementById("mediaQrCode");
-    if (!qrDiv) return;
-    qrDiv.innerHTML = "";
-    if (typeof QRCode !== "undefined") {
-        mediaBroadcastQrInstance = new QRCode(qrDiv, {
-            text: text,
-            width: 180,
-            height: 180,
-            colorDark: "#00f0ff",
-            colorLight: "#0a0e17",
-            correctLevel: QRCode.CorrectLevel.M
-        });
+    const container = document.getElementById("mediaQrCode");
+    if (!container || typeof qrcode === "undefined") return;
+    try {
+        container.innerHTML = "";
+        let qr;
+        try {
+            qr = qrcode(0, "M");
+            qr.addData(text);
+            qr.make();
+        } catch (_) {
+            qr = qrcode(0, "L");
+            qr.addData(text);
+            qr.make();
+        }
+        const svg = qr.createSvgTag(4, 4);
+        container.innerHTML = svg
+            .replaceAll('fill="white"', 'fill="#0a0e17"')
+            .replaceAll('fill="black"', 'fill="#00f0ff"');
+    } catch (err) {
+        console.error("Media QR Code error:", err);
     }
 }
 
@@ -2627,8 +2626,20 @@ function copyMediaStreamLink() {
 }
 
 function toggleMediaQr() {
-    const c = document.getElementById("mediaQrContainer");
-    if (c) c.classList.toggle("hidden");
+    const box = document.getElementById("mediaQrContainer");
+    const btn = document.getElementById("btnToggleMediaQR");
+    if (!box) return;
+    if (box.classList.contains("hidden")) {
+        box.classList.remove("hidden");
+        if (btn) btn.innerText = "Hide QR Code";
+        const linkInput = document.getElementById("mediaStreamLinkInput");
+        if (linkInput && linkInput.value) {
+            renderMediaQr(linkInput.value);
+        }
+    } else {
+        box.classList.add("hidden");
+        if (btn) btn.innerText = "Show QR Code";
+    }
 }
 
 function stopMediaBroadcast() {
@@ -2644,6 +2655,13 @@ function stopMediaBroadcast() {
         mediaBroadcastPeer = null;
     }
     mediaActiveViewers.clear();
+
+    const qrBox = document.getElementById("mediaQrContainer");
+    if (qrBox) qrBox.classList.add("hidden");
+    const btn = document.getElementById("btnToggleMediaQR");
+    if (btn) btn.innerText = "Show QR Code";
+    const qrDiv = document.getElementById("mediaQrCode");
+    if (qrDiv) qrDiv.innerHTML = "";
 
     document.getElementById("btnStartBroadcast").classList.remove("hidden");
     document.getElementById("btnStopBroadcast").classList.add("hidden");
@@ -3239,7 +3257,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     // Setup Service Worker for in-browser video & audio streaming
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw-stream.js?v=1.9.1', { scope: './' })
+        navigator.serviceWorker.register('sw-stream.js?v=1.9.2', { scope: './' })
             .then(reg => {
                 console.log('Stream ServiceWorker registered with scope:', reg.scope);
             })
