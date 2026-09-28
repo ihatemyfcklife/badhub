@@ -3,6 +3,47 @@
  * Integrates Go WebAssembly, badsharing, badrlnc, and badcrypt.
  */
 
+// Custom Popup Modal System
+function showPopup(message, type) {
+    const overlay = document.getElementById("bhModalOverlay");
+    const icon = document.getElementById("bhModalIcon");
+    const title = document.getElementById("bhModalTitle");
+    const body = document.getElementById("bhModalMessage");
+    if (!overlay || !body) return;
+
+    body.innerText = message;
+
+    icon.className = "bh-modal-icon";
+    if (type === "error") {
+        icon.innerText = "[X]";
+        icon.classList.add("icon-error");
+        title.innerText = "Error";
+    } else if (type === "success") {
+        icon.innerText = "[OK]";
+        icon.classList.add("icon-success");
+        title.innerText = "Success";
+    } else {
+        icon.innerText = "[!]";
+        icon.classList.add("icon-info");
+        title.innerText = "Notice";
+    }
+
+    overlay.classList.remove("hidden");
+    const btn = document.getElementById("bhModalBtnOk");
+    if (btn) btn.focus();
+}
+
+function closePopup(event) {
+    if (event.target.id === "bhModalOverlay") {
+        dismissPopup();
+    }
+}
+
+function dismissPopup() {
+    const overlay = document.getElementById("bhModalOverlay");
+    if (overlay) overlay.classList.add("hidden");
+}
+
 // Application State
 let selectedFile = null;
 let selectedFileData = null;
@@ -210,7 +251,7 @@ function copyMagicLink() {
     const txt = document.getElementById("txtMagicLink");
     const btn = document.getElementById("btnCopyMagicLink");
     if (!txt || !txt.value) {
-        alert("Please select a file first to generate a link.");
+        showPopup("Please select a file first to generate a link.", "error");
         return;
     }
     navigator.clipboard.writeText(txt.value).then(() => {
@@ -523,7 +564,7 @@ function toggleDirectDisk(checked) {
         } else {
             badge.innerText = "Not Supported (Memory Mode)";
             badge.className = "privacy-badge badge-direct";
-            alert("Disk streaming APIs (FileSystem Access / OPFS) are not supported in this browser. Falling back to RAM buffer mode.");
+            showPopup("Disk streaming APIs (FileSystem Access / OPFS) are not supported in this browser. Falling back to RAM buffer mode.", "error");
             document.getElementById("recvDirectDiskToggle").checked = false;
             directDiskEnabled = false;
         }
@@ -697,12 +738,12 @@ async function connectToNostrRoom(roomId) {
         roomId = document.getElementById("recvRoomCodeInput").value.trim();
     }
     if (!roomId) {
-        alert("Please enter a room code or click a magic link.");
+        showPopup("Please enter a room code or click a magic link.", "error");
         return;
     }
 
     if (typeof window.NostrTools === "undefined") {
-        alert("Nostr library not loaded. Please check your connection.");
+        showPopup("Nostr library not loaded. Please check your connection.", "error");
         return;
     }
     const pool = getNostrPool();
@@ -832,7 +873,7 @@ function connectToRoom(roomId) {
         roomId = document.getElementById("recvRoomCodeInput").value.trim();
     }
     if (!roomId) {
-        alert("Please enter a room code or click a magic link.");
+        showPopup("Please enter a room code or click a magic link.", "error");
         return;
     }
 
@@ -842,7 +883,7 @@ function connectToRoom(roomId) {
     }
 
     if (typeof Peer === "undefined") {
-        alert("PeerJS is not loaded. Please check your connection.");
+        showPopup("PeerJS is not loaded. Please check your connection.", "error");
         return;
     }
 
@@ -1124,7 +1165,7 @@ async function uploadToBlossom(passphrase) {
     // 2. Initialize Blossom Encryptor in WASM
     const initRes = window.BadHub.initBlossomEncryptor(selectedFile.name, selectedFile.size, checksumHex, passphrase);
     if (!initRes || !initRes.success) {
-        alert("Failed to initialize Blossom encryptor: " + (initRes ? initRes.error : "unknown error"));
+        showPopup("Failed to initialize Blossom encryptor: " + (initRes ? initRes.error : "unknown error"), "error");
         stopTransmission();
         return;
     }
@@ -1143,7 +1184,7 @@ async function uploadToBlossom(passphrase) {
         const slice = await selectedFile.slice(offset, end).arrayBuffer();
         const encChunkRes = window.BadHub.encryptBlossomChunk(new Uint8Array(slice));
         if (!encChunkRes || !encChunkRes.success) {
-            alert("Chunk encryption failed: " + (encChunkRes ? encChunkRes.error : "unknown error"));
+            showPopup("Chunk encryption failed: " + (encChunkRes ? encChunkRes.error : "unknown error"), "error");
             stopTransmission();
             return;
         }
@@ -1276,7 +1317,7 @@ async function uploadToBlossom(passphrase) {
         if (isTransmitting) {
             statusEl.innerText = "Error: " + err.message;
             statusEl.className = "metric-value color-danger";
-            alert("Blossom Upload Failed: " + err.message);
+            showPopup("Blossom Upload Failed: " + err.message, "error");
             stopTransmission();
         }
     });
@@ -1345,7 +1386,7 @@ async function startSending() {
     // 1. Initialize Streaming Sender in Go WASM (0 RAM overhead)
     const res = window.BadHub.initStreamingSender(selectedFile.name, selectedFile.size, checksumHex, passphrase, redundancy, 64, 64);
     if (!res || !res.success) {
-        alert("Failed to initialize sender: " + (res ? res.error : "unknown error"));
+        showPopup("Failed to initialize sender: " + (res ? res.error : "unknown error"), "error");
         releaseWakeLock();
         stopTransmission();
         return;
@@ -1372,7 +1413,7 @@ async function startSending() {
     } else if (transport === "nostr") {
         const pool = getNostrPool();
         if (!pool) {
-            alert("Nostr engine is not loaded. Please check your connection.");
+            showPopup("Nostr engine is not loaded. Please check your connection.", "error");
             stopTransmission();
             return;
         }
@@ -1409,7 +1450,7 @@ async function startSending() {
     } else {
         // WebRTC DataChannel
         if (!activeDataChannel || activeDataChannel.readyState !== "open") {
-            alert("WebRTC DataChannel is not open! Please share your Magic Link / QR Code or connect your peer first.");
+            showPopup("WebRTC DataChannel is not open! Please share your Magic Link / QR Code or connect your peer first.", "error");
             stopTransmission();
             return;
         }
@@ -1846,7 +1887,7 @@ async function startBlossomDownload() {
     const passphrase = document.getElementById("recvPassphrase")?.value || "badhub-secure-swarm-v1";
 
     if (!inputVal) {
-        alert("Please enter a Blossom Blob URL or SHA-256 hash.");
+        showPopup("Please enter a Blossom Blob URL or SHA-256 hash.", "error");
         return;
     }
 
@@ -2044,7 +2085,7 @@ async function startBlossomDownload() {
             integrityEl.innerText = "FAILED";
             integrityEl.className = "metric-value color-danger";
             statusEl.innerText = "Error: " + err.message;
-            alert("Blossom Download Error: " + err.message);
+            showPopup("Blossom Download Error: " + err.message, "error");
             stopReceiving();
         }
     } finally {
@@ -2080,7 +2121,7 @@ async function generateWebRTCOffer() {
     activeDataChannel.binaryType = "arraybuffer";
 
     activeDataChannel.onopen = () => {
-        alert("WebRTC P2P DataChannel connected! You can now start transmission.");
+        showPopup("WebRTC P2P DataChannel connected! You can now start transmission.", "success");
     };
 
     activePeerConnection.onicecandidate = e => {
@@ -2098,22 +2139,22 @@ async function generateWebRTCOffer() {
 async function acceptWebRTCAnswer() {
     const rawAnswer = document.getElementById("txtSenderAnswer").value.trim();
     if (!rawAnswer) {
-        alert("Please paste the receiver's answer token.");
+        showPopup("Please paste the receiver's answer token.", "error");
         return;
     }
     try {
         const answer = JSON.parse(atob(rawAnswer));
         await activePeerConnection.setRemoteDescription(answer);
-        alert("Peer answer configured! Connecting DataChannel...");
+        showPopup("Peer answer configured! Connecting DataChannel...", "success");
     } catch (err) {
-        alert("Invalid answer token format: " + err.message);
+        showPopup("Invalid answer token format: " + err.message, "error");
     }
 }
 
 async function generateWebRTCAnswer() {
     const rawOffer = document.getElementById("txtRecvOffer").value.trim();
     if (!rawOffer) {
-        alert("Please paste the sender's offer token first.");
+        showPopup("Please paste the sender's offer token first.", "error");
         return;
     }
 
@@ -2126,7 +2167,7 @@ async function generateWebRTCAnswer() {
             activeDataChannel = e.channel;
             activeDataChannel.binaryType = "arraybuffer";
             activeDataChannel.onopen = () => {
-                alert("WebRTC P2P DataChannel connected on receiver!");
+                showPopup("WebRTC P2P DataChannel connected on receiver!", "success");
             };
         };
 
@@ -2141,7 +2182,7 @@ async function generateWebRTCAnswer() {
         const answer = await activePeerConnection.createAnswer();
         await activePeerConnection.setLocalDescription(answer);
     } catch (err) {
-        alert("Invalid offer token format: " + err.message);
+        showPopup("Invalid offer token format: " + err.message, "error");
     }
 }
 
@@ -2280,11 +2321,11 @@ function handleMediaFileSelected(file) {
 
 async function startMediaBroadcast() {
     if (!mediaSelectedFile) {
-        alert("Please select a media file to broadcast.");
+        showPopup("Please select a media file to broadcast.", "error");
         return;
     }
     if (!window.BadHub || !window.BadHub.ready) {
-        alert("WebAssembly Engine is not ready.");
+        showPopup("WebAssembly Engine is not ready.", "error");
         return;
     }
 
@@ -2592,7 +2633,7 @@ async function broadcastViaBlossom(passphrase) {
     } catch (err) {
         if (!isBroadcastingMedia) return;
         statusEl.innerText = "Error: " + err.message;
-        alert("Blossom Broadcast Error: " + err.message);
+        showPopup("Blossom Broadcast Error: " + err.message, "error");
         stopMediaBroadcast();
     }
 }
@@ -2625,11 +2666,11 @@ function copyMediaStreamLink() {
     const linkInput = document.getElementById("mediaStreamLinkInput");
     if (linkInput && linkInput.value) {
         navigator.clipboard.writeText(linkInput.value).then(() => {
-            alert("Stream link copied to clipboard!");
+            showPopup("Stream link copied to clipboard!", "success");
         }).catch(() => {
             linkInput.select();
             document.execCommand("copy");
-            alert("Stream link copied!");
+            showPopup("Stream link copied!", "success");
         });
     }
 }
@@ -2694,7 +2735,7 @@ async function startStreamingPlayback(customParam) {
         : document.getElementById("mediaStreamInput").value.trim();
 
     if (!inputVal) {
-        alert("Please enter a stream link, room code, or Blossom URL.");
+        showPopup("Please enter a stream link, room code, or Blossom URL.", "error");
         return;
     }
 

@@ -741,6 +741,22 @@
         </footer>
     </div>
 
+    <!-- Custom Popup Modal -->
+    <div class="bh-modal-overlay hidden" id="bhModalOverlay" onclick="closePopup(event)">
+        <div class="bh-modal" id="bhModal">
+            <div class="bh-modal-header">
+                <span class="bh-modal-icon" id="bhModalIcon">[!]</span>
+                <span class="bh-modal-title" id="bhModalTitle">Notice</span>
+            </div>
+            <div class="bh-modal-body">
+                <p id="bhModalMessage"></p>
+            </div>
+            <div class="bh-modal-footer">
+                <button class="btn btn-primary" id="bhModalBtnOk" onclick="dismissPopup()">OK</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Client-Side Libraries & Execution Bridge -->
     <script src="wasm_exec.js?v=1.9.3"></script>
     <script src="qrcode.min.js?v=1.9.3"></script>

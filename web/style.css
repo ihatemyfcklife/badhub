@@ -1366,3 +1366,104 @@ body {
     border-color: var(--accent-cyan);
 }
 
+/* Custom Popup Modal */
+.bh-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(6, 9, 15, 0.80);
+    backdrop-filter: blur(6px);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: modalFadeIn 0.2s ease-out;
+}
+
+.bh-modal-overlay.hidden {
+    display: none;
+}
+
+@keyframes modalFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes modalSlideIn {
+    from { opacity: 0; transform: translateY(-20px) scale(0.96); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.bh-modal {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 0;
+    width: 90%;
+    max-width: 480px;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.7), 0 0 30px rgba(0, 240, 255, 0.06);
+    animation: modalSlideIn 0.25s ease-out;
+    overflow: hidden;
+}
+
+.bh-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+    background: #080c14;
+}
+
+.bh-modal-icon {
+    font-family: var(--font-mono);
+    font-weight: 800;
+    font-size: 1rem;
+    color: var(--accent-cyan);
+    flex-shrink: 0;
+}
+
+.bh-modal-icon.icon-error {
+    color: #ff4d6a;
+}
+
+.bh-modal-icon.icon-success {
+    color: #00ff88;
+}
+
+.bh-modal-icon.icon-info {
+    color: var(--accent-cyan);
+}
+
+.bh-modal-title {
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--text-primary);
+    letter-spacing: 0.3px;
+}
+
+.bh-modal-body {
+    padding: 20px;
+}
+
+.bh-modal-body p {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.65;
+    margin: 0;
+    word-break: break-word;
+}
+
+.bh-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 12px 20px;
+    border-top: 1px solid var(--border-color);
+    background: #080c14;
+}
+
+.bh-modal-footer .btn {
+    min-width: 90px;
+}
