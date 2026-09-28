@@ -44,7 +44,7 @@ async function initWasm() {
     const go = new Go();
 
     try {
-        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.8.0"), go.importObject);
+        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.8.1"), go.importObject);
         go.run(result.instance);
 
         // Await BadHub global bridge initialization
@@ -56,7 +56,7 @@ async function initWasm() {
 
         if (window.BadHub && window.BadHub.ready) {
             statusDot.className = "status-dot ready";
-            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.8.0";
+            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.8.1";
             statusText.innerText = "Engine Ready (" + ver + ")";
             checkSenderReady();
             checkUrlHash();
@@ -75,7 +75,7 @@ async function fetchGitHubBadHubVersion() {
     try {
         // 1. Check static version.json first (instant, unaffected by GitHub API rate limits)
         try {
-            const localResp = await fetch("version.json?v=1.8.0");
+            const localResp = await fetch("version.json?v=1.8.1");
             if (localResp.ok) {
                 const localData = await localResp.json();
                 if (localData && localData.version) {
@@ -2952,7 +2952,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     // Setup Service Worker for in-browser video & audio streaming
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw-stream.js?v=1.8.0', { scope: './' })
+        navigator.serviceWorker.register('sw-stream.js?v=1.8.1', { scope: './' })
             .then(reg => {
                 console.log('Stream ServiceWorker registered with scope:', reg.scope);
             })
