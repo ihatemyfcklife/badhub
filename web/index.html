@@ -632,7 +632,7 @@
 
                     <!-- Video / Audio Player Viewport -->
                     <div class="player-viewport" id="playerViewport">
-                        <video id="mediaStreamVideo" class="media-video-element" controls playsinline></video>
+                        <video id="mediaStreamVideo" class="media-video-element" playsinline></video>
                         <div id="mediaAudioVisualizer" class="audio-visualizer-box hidden">
                             <div class="audio-pulse-bars">
                                 <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
@@ -642,6 +642,56 @@
                         <div id="playerBufferingOverlay" class="player-buffering-overlay hidden">
                             <div class="spinner"></div>
                             <p id="playerBufferingText">Buffering stream...</p>
+                        </div>
+                    </div>
+
+                    <!-- Custom Cyberpunk Timeline & Playback Controls Bar -->
+                    <div class="player-custom-controls" id="playerCustomControls">
+                        <div class="timeline-wrapper" id="timelineWrapper">
+                            <div class="timeline-bar-bg" id="timelineBarBg" onclick="onTimelineBarClick(event)">
+                                <div class="timeline-buffered-bar" id="timelineBufferedBar" style="width: 0%;"></div>
+                                <div class="timeline-played-bar" id="timelinePlayedBar" style="width: 0%;"></div>
+                                <input type="range" id="timelineSeekSlider" min="0" max="100" value="0" step="0.1" class="timeline-slider" oninput="onTimelineSliderInput(this.value)" onchange="onTimelineSliderChange(this.value)">
+                            </div>
+                        </div>
+
+                        <div class="player-controls-row">
+                            <div class="controls-left">
+                                <button class="btn-player-ctrl" id="btnPlayerPlayPause" title="Play / Pause" onclick="togglePlayerPlayPause()">
+                                    <span id="playerPlayPauseText">PLAY</span>
+                                </button>
+                                <button class="btn-player-ctrl" id="btnPlayerSkipBack" title="Skip -10s" onclick="skipPlayerTime(-10)">
+                                    <span>-10s</span>
+                                </button>
+                                <button class="btn-player-ctrl" id="btnPlayerSkipForward" title="Skip +10s" onclick="skipPlayerTime(10)">
+                                    <span>+10s</span>
+                                </button>
+                                <div class="player-time-display">
+                                    <span id="playerCurrentTime" class="font-mono">00:00</span>
+                                    <span class="time-sep">/</span>
+                                    <span id="playerTotalDuration" class="font-mono">--:--</span>
+                                </div>
+                            </div>
+
+                            <div class="controls-right">
+                                <div class="speed-selector-box">
+                                    <label for="playerSpeedSelect" class="speed-label">Speed</label>
+                                    <select id="playerSpeedSelect" class="speed-select" onchange="changePlayerPlaybackSpeed(this.value)">
+                                        <option value="0.5">0.5x</option>
+                                        <option value="0.75">0.75x</option>
+                                        <option value="1" selected>1.0x</option>
+                                        <option value="1.25">1.25x</option>
+                                        <option value="1.5">1.5x</option>
+                                        <option value="2">2.0x</option>
+                                    </select>
+                                </div>
+                                <button class="btn-player-ctrl" id="btnPlayerMute" title="Mute / Unmute" onclick="togglePlayerMute()">
+                                    <span id="playerMuteText">VOL</span>
+                                </button>
+                                <button class="btn-player-ctrl" id="btnPlayerFullscreen" title="Fullscreen" onclick="togglePlayerFullscreen()">
+                                    <span>[ ]</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
 
