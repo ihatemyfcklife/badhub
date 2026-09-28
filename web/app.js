@@ -44,7 +44,7 @@ async function initWasm() {
     const go = new Go();
 
     try {
-        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.7.3"), go.importObject);
+        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.8.0"), go.importObject);
         go.run(result.instance);
 
         // Await BadHub global bridge initialization
@@ -56,7 +56,7 @@ async function initWasm() {
 
         if (window.BadHub && window.BadHub.ready) {
             statusDot.className = "status-dot ready";
-            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.7.3";
+            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.8.0";
             statusText.innerText = "Engine Ready (" + ver + ")";
             checkSenderReady();
             checkUrlHash();
@@ -75,7 +75,7 @@ async function fetchGitHubBadHubVersion() {
     try {
         // 1. Check static version.json first (instant, unaffected by GitHub API rate limits)
         try {
-            const localResp = await fetch("version.json?v=1.7.3");
+            const localResp = await fetch("version.json?v=1.8.0");
             if (localResp.ok) {
                 const localData = await localResp.json();
                 if (localData && localData.version) {
@@ -114,9 +114,9 @@ function switchTab(tab) {
     } else if (tab === "recv") {
         document.getElementById("tabRecv").classList.add("active");
         document.getElementById("contentRecv").classList.add("active");
-    } else if (tab === "sim") {
-        document.getElementById("tabSim").classList.add("active");
-        document.getElementById("contentSim").classList.add("active");
+    } else if (tab === "media") {
+        document.getElementById("tabMedia").classList.add("active");
+        document.getElementById("contentMedia").classList.add("active");
     }
 }
 
@@ -960,6 +960,28 @@ function checkUrlHash() {
         }
         const statusEl = document.getElementById("recvMetricStatus");
         if (statusEl) statusEl.innerText = "Blossom Blob detected. Ready to download (Sender offline).";
+    }
+
+    const streamParam = params.get("stream");
+    if (streamParam) {
+        switchTab("media");
+        switchMediaMode("watch");
+        const streamInput = document.getElementById("mediaStreamInput");
+        if (streamInput) {
+            streamInput.value = window.location.hash;
+        }
+        if (key) {
+            const passInput = document.getElementById("mediaWatchPassphrase");
+            if (passInput) passInput.value = key;
+        }
+        const tryAutoStream = () => {
+            if (window.BadHub && window.BadHub.ready) {
+                startStreamingPlayback(window.location.hash);
+            } else {
+                setTimeout(tryAutoStream, 150);
+            }
+        };
+        tryAutoStream();
     }
 }
 
@@ -2104,143 +2126,783 @@ async function generateWebRTCAnswer() {
 }
 
 // ==========================================
-// ONE-CLICK IN-BROWSER SIMULATOR
+// DECENTRALIZED MEDIA & VIDEO STREAMING ENGINE
 // ==========================================
 
-async function runSimulation() {
-    if (!window.BadHub) return;
+let mediaSelectedFile = null;
+let mediaBroadcastPeer = null;
+let mediaActiveViewers = new Map();
+let isBroadcastingMedia = false;
+let mediaBroadcastStartTime = 0;
+let mediaTotalStreamedBytes = 0;
+let mediaBroadcastQrInstance = null;
 
-    const btn = document.getElementById("btnRunSim");
-    btn.disabled = true;
+let isStreamingPlayback = false;
+let mediaViewerPeer = null;
+let mediaViewerConn = null;
+let mediaPlaybackStartTime = 0;
+let mediaTotalReceivedBytes = 0;
+let mediaTotalFileSize = 0;
+let mediaDecryptedChunks = [];
+let mediaStreamMime = "video/mp4";
+let currentStreamFileName = "streamed-media.mp4";
+let activeStreamId = "";
+let swStreamActive = false;
+let activeSourceBuffer = null;
+let mediaBlossomAbortController = null;
+let initialBlobLoaded = false;
+let mediaOpfsFileHandle = null;
+let mediaOpfsWritable = null;
 
-    const sizeKB = parseInt(document.getElementById("simPayloadSize").value) || 256;
-    const lossRate = parseFloat(document.getElementById("simLossRate").value) / 100.0;
-    const redundancy = 0.40; // 40% parity redundancy
+// Mode Switching (Broadcast vs Watch)
+function switchMediaMode(mode) {
+    const navBroadcast = document.getElementById("mediaNavBroadcast");
+    const navWatch = document.getElementById("mediaNavWatch");
+    const panelBroadcast = document.getElementById("mediaBroadcastSection");
+    const panelWatch = document.getElementById("mediaWatchSection");
 
-    const statusEl = document.getElementById("simMetricStatus");
-    const dataEl = document.getElementById("simMetricData");
-    const parityEl = document.getElementById("simMetricParity");
-    const droppedEl = document.getElementById("simMetricDropped");
-    const lossPctEl = document.getElementById("simMetricLossPct");
-    const verifiedEl = document.getElementById("simMetricVerified");
-    const progressBar = document.getElementById("simProgressBar");
-    const logBox = document.getElementById("simLog");
-
-    logBox.innerHTML = "";
-    const log = (msg, cls = "info") => {
-        const div = document.createElement("div");
-        div.className = `log-entry ${cls}`;
-        div.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
-        logBox.appendChild(div);
-        logBox.scrollTop = logBox.scrollHeight;
-    };
-
-    log(`Generating synthetic payload: ${sizeKB} KB...`);
-    statusEl.innerText = "Generating test payload...";
-    progressBar.style.width = "0%";
-
-    // Generate pseudo-random test bytes
-    const totalBytes = sizeKB * 1024;
-    const syntheticData = new Uint8Array(totalBytes);
-    for (let i = 0; i < totalBytes; i++) {
-        syntheticData[i] = (i * 31 + 17) & 0xFF;
-    }
-
-    const passphrase = "simulation-secret-passphrase-2026";
-    log("Initializing WASM Sender (RLNC Sliding Window: 64, Generation Size: 64, Redundancy: 40%)...");
-
-    const senderRes = window.BadHub.initSender("simulation-test.bin", syntheticData, passphrase, redundancy, 64, 64);
-    if (!senderRes.success) {
-        log("Sender init failed: " + senderRes.error, "error");
-        btn.disabled = false;
-        return;
-    }
-    log(`Sender initialized: ${senderRes.totalChunks} chunks in ${senderRes.totalGenerations} generation(s), SHA-256=${senderRes.checksum.slice(0, 16)}...`);
-
-    log("Initializing WASM Receiver with encrypted metadata...");
-    const recvRes = window.BadHub.initReceiver(senderRes.encryptedMetadata, passphrase);
-    if (!recvRes.success) {
-        log("Receiver init failed: " + recvRes.error, "error");
-        btn.disabled = false;
-        return;
-    }
-
-    log(`Starting packet stream under ${Math.round(lossRate * 100)}% simulated packet loss...`);
-    statusEl.innerText = `Streaming with ${Math.round(lossRate * 100)}% loss...`;
-
-    let totalEmitted = 0;
-    let totalDropped = 0;
-    let framesToFeed = [];
-
-    // Collect frames from sender and apply loss
-    while (true) {
-        const frameRes = window.BadHub.nextSenderFrame();
-        if (frameRes.error) {
-            log("Sender error: " + frameRes.error, "error");
-            break;
-        }
-        if (frameRes.eof) break;
-
-        if (frameRes.frame) {
-            totalEmitted++;
-            if (Math.random() < lossRate) {
-                totalDropped++;
-                // Packet dropped in transmission
-            } else {
-                framesToFeed.push(frameRes.frame);
-            }
-        }
-    }
-
-    const stats = window.BadHub.getSenderStats();
-    dataEl.innerText = stats.dataPackets;
-    parityEl.innerText = stats.parityPackets;
-    droppedEl.innerText = totalDropped;
-    lossPctEl.innerText = ((totalDropped / totalEmitted) * 100).toFixed(1) + "%";
-
-    log(`Emission complete: ${stats.dataPackets} data, ${stats.parityPackets} parity. ${totalDropped} frames dropped (${lossPctEl.innerText}).`);
-    log("Feeding surviving frames to Gauss-Jordan incremental linear solver...");
-
-    let swarmRecodedCount = 0;
-    for (let i = 0; i < framesToFeed.length; i++) {
-        const ingestRes = window.BadHub.ingestReceiverFrame(framesToFeed[i]);
-        const pct = Math.min(100, Math.round(((i + 1) / framesToFeed.length) * 100));
-        progressBar.style.width = pct + "%";
-
-        if (pct >= 30 && swarmRecodedCount < 2) {
-            swarmRecodedCount++;
-            const recodedRes = window.BadHub.recodeReceiverFrame();
-            if (recodedRes && recodedRes.success) {
-                log(`[P2P Swarm] Generated innovative recoded frame #${swarmRecodedCount} (${recodedRes.frame.length} B) over GF(2) at ${pct}% progress!`, "info");
-            }
-        }
-
-        if (i % 8 === 0) {
-            await new Promise(r => setTimeout(r, 0));
-        }
-    }
-
-    log("Finalizing receiver and verifying bit-exact SHA-256 integrity anchor...");
-    const finalRes = window.BadHub.finalizeReceiver();
-
-    if (finalRes && finalRes.success) {
-        statusEl.innerText = "Completed: 100% Bit-Exact Match!";
-        verifiedEl.innerText = "SHA-256 VERIFIED";
-        verifiedEl.className = "metric-value highlight-text";
-        progressBar.style.width = "100%";
-        log(`RECOVERY SUCCESS: All ${sizeKB} KB reconstructed! SHA-256=${finalRes.checksum}`, "success");
+    if (mode === "broadcast") {
+        navBroadcast.classList.add("active");
+        navWatch.classList.remove("active");
+        panelBroadcast.classList.add("active");
+        panelWatch.classList.remove("active");
     } else {
-        statusEl.innerText = "Failed";
-        verifiedEl.innerText = "FAILED";
-        verifiedEl.className = "metric-value color-danger";
-        log("RECOVERY FAILED: " + (finalRes ? finalRes.error : "unknown error"), "error");
+        navWatch.classList.add("active");
+        navBroadcast.classList.remove("active");
+        panelWatch.classList.add("active");
+        panelBroadcast.classList.remove("active");
     }
+}
+
+// Transport Switching for Media Broadcast
+function switchMediaTransport(mode) {
+    // Mode can be 'webrtc' or 'blossom'
+}
+
+// Slider update helper
+function updateMediaRedundancy(val) {
+    const el = document.getElementById("mediaRedundancyVal");
+    if (el) el.innerText = val + "%";
+}
+
+// Handle Media File Selection
+function handleMediaFileSelected(file) {
+    if (!file) return;
+    mediaSelectedFile = file;
+
+    const dropTitle = document.getElementById("mediaDropTitle");
+    const dropSubtitle = document.getElementById("mediaDropSubtitle");
+    const previewBox = document.getElementById("mediaLocalPreviewBox");
+    const previewType = document.getElementById("mediaPreviewType");
+    const previewName = document.getElementById("mediaPreviewName");
+    const previewMeta = document.getElementById("mediaPreviewMeta");
+    const previewVideo = document.getElementById("mediaBroadcastLocalPreview");
+    const btnStart = document.getElementById("btnStartBroadcast");
+
+    dropTitle.innerText = file.name;
+    dropSubtitle.innerText = `${formatBytes(file.size)} - ${file.type || 'application/octet-stream'}`;
+
+    const isAudio = file.type.startsWith("audio/");
+    const isVideo = file.type.startsWith("video/") || /\.(mp4|webm|mkv|mov|avi)$/i.test(file.name);
+
+    previewType.innerText = isAudio ? "AUDIO" : (isVideo ? "VIDEO" : "MEDIA");
+    previewName.innerText = file.name;
+    previewMeta.innerText = formatBytes(file.size);
+
+    previewBox.classList.remove("hidden");
+
+    if (isVideo) {
+        previewVideo.classList.remove("hidden");
+        const objUrl = URL.createObjectURL(file);
+        previewVideo.src = objUrl;
+        previewVideo.onloadedmetadata = () => {
+            const dur = Math.round(previewVideo.duration);
+            const mins = Math.floor(dur / 60);
+            const secs = dur % 60;
+            const durStr = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+            previewMeta.innerText = `${previewVideo.videoWidth}x${previewVideo.videoHeight} - ${durStr} - ${formatBytes(file.size)}`;
+        };
+    } else {
+        previewVideo.classList.add("hidden");
+        previewVideo.src = "";
+    }
+
+    btnStart.disabled = false;
+}
+
+// ------------------------------------------
+// BROADCASTER LOGIC (Diffuser un Media)
+// ------------------------------------------
+
+async function startMediaBroadcast() {
+    if (!mediaSelectedFile) {
+        alert("Please select a media file to broadcast.");
+        return;
+    }
+    if (!window.BadHub || !window.BadHub.ready) {
+        alert("WebAssembly Engine is not ready.");
+        return;
+    }
+
+    const transportRadio = document.querySelector('input[name="mediaTransport"]:checked');
+    const transport = transportRadio ? transportRadio.value : "webrtc";
+    const passphrase = document.getElementById("mediaPassphrase").value.trim() || "badhub-live-stream-v1";
+    const redundancy = (parseInt(document.getElementById("mediaRedundancy").value, 10) || 25) / 100.0;
+
+    isBroadcastingMedia = true;
+    mediaTotalStreamedBytes = 0;
+    mediaBroadcastStartTime = performance.now();
+    mediaActiveViewers.clear();
+
+    document.getElementById("btnStartBroadcast").classList.add("hidden");
+    document.getElementById("btnStopBroadcast").classList.remove("hidden");
+    document.getElementById("mediaBroadcastActiveCard").classList.remove("hidden");
+
+    const statusEl = document.getElementById("mediaBroadcastStatus");
+    const linkInput = document.getElementById("mediaStreamLinkInput");
+
+    if (transport === "webrtc") {
+        statusEl.innerText = "Initializing P2P Room...";
+        const streamRoomId = "bh-stream-" + Math.random().toString(36).substring(2, 10);
+
+        const turnConf = getTurnConfig();
+        try {
+            mediaBroadcastPeer = new Peer(streamRoomId, turnConf);
+        } catch (e) {
+            mediaBroadcastPeer = new Peer(streamRoomId);
+        }
+
+        mediaBroadcastPeer.on("open", id => {
+            statusEl.innerText = "Broadcasting (P2P Room Ready)";
+            const streamUrl = `${window.location.origin}${window.location.pathname}#stream=p2p&room=${encodeURIComponent(id)}&key=${encodeURIComponent(passphrase)}&name=${encodeURIComponent(mediaSelectedFile.name)}&type=${encodeURIComponent(mediaSelectedFile.type || "video/mp4")}&size=${mediaSelectedFile.size}`;
+            linkInput.value = streamUrl;
+            renderMediaQr(streamUrl);
+        });
+
+        mediaBroadcastPeer.on("connection", conn => {
+            conn.on("open", async () => {
+                mediaActiveViewers.set(conn.peer, conn);
+                updateViewerCount();
+                await streamMediaToViewer(conn, passphrase, redundancy);
+            });
+
+            conn.on("close", () => {
+                mediaActiveViewers.delete(conn.peer);
+                updateViewerCount();
+            });
+
+            conn.on("error", () => {
+                mediaActiveViewers.delete(conn.peer);
+                updateViewerCount();
+            });
+        });
+
+        mediaBroadcastPeer.on("error", err => {
+            console.warn("Media Broadcaster PeerJS warning:", err);
+            statusEl.innerText = "Signaling Notice: " + err.type;
+        });
+
+    } else if (transport === "blossom") {
+        statusEl.innerText = "Encrypting & Uploading to Blossom Relays...";
+        await broadcastViaBlossom(passphrase);
+    }
+}
+
+function updateViewerCount() {
+    const el = document.getElementById("mediaViewerCount");
+    if (el) el.innerText = mediaActiveViewers.size;
+}
+
+async function streamMediaToViewer(conn, passphrase, redundancy) {
+    try {
+        const file = mediaSelectedFile;
+        if (!file) return;
+
+        const arrayBuf = await file.arrayBuffer();
+        const fileBytes = new Uint8Array(arrayBuf);
+
+        const senderRes = window.BadHub.initSender(file.name, fileBytes, passphrase, redundancy, 64, 64);
+        if (!senderRes || !senderRes.success) {
+            console.error("Failed to init media sender:", senderRes ? senderRes.error : "unknown");
+            return;
+        }
+
+        const headerPayload = {
+            type: "BH_MEDIA_STREAM_HEADER",
+            name: file.name,
+            size: file.size,
+            mime: file.type || "video/mp4",
+            meta: Array.from(senderRes.encryptedMetadata)
+        };
+        conn.send(JSON.stringify(headerPayload));
+
+        let chunksStreamed = 0;
+        const chunksEl = document.getElementById("mediaChunksStreamed");
+        const bitrateEl = document.getElementById("mediaBitrate");
+
+        while (isBroadcastingMedia && conn.open) {
+            const frameRes = window.BadHub.nextSenderFrame();
+            if (frameRes.error || frameRes.eof) break;
+
+            if (frameRes.frame) {
+                conn.send(frameRes.frame.buffer);
+                chunksStreamed++;
+                mediaTotalStreamedBytes += frameRes.frame.length;
+
+                if (chunksEl) chunksEl.innerText = chunksStreamed;
+                const elapsedSec = (performance.now() - mediaBroadcastStartTime) / 1000;
+                if (elapsedSec > 0 && bitrateEl) {
+                    const mbps = (mediaTotalStreamedBytes / 1048576) / elapsedSec;
+                    bitrateEl.innerText = `${mbps.toFixed(2)} MB/s`;
+                }
+
+                if (conn.dataChannel && conn.dataChannel.bufferedAmount > 2 * 1024 * 1024) {
+                    await new Promise(r => setTimeout(r, 20));
+                }
+            }
+        }
+    } catch (err) {
+        console.warn("Stream transmission to viewer ended:", err);
+    }
+}
+
+async function broadcastViaBlossom(passphrase) {
+    const statusEl = document.getElementById("mediaBroadcastStatus");
+    const linkInput = document.getElementById("mediaStreamLinkInput");
+    const file = mediaSelectedFile;
+    const server = "https://nostr.download";
+
+    try {
+        const initRes = window.BadHub.initBlossomEncryptor(file.name, file.size, file.type || "video/mp4", passphrase);
+        if (!initRes || !initRes.success) {
+            throw new Error(initRes ? initRes.error : "Encryption init failed");
+        }
+
+        const sealedChunks = [initRes.header];
+        const chunkSize = 256 * 1024;
+        let offset = 0;
+
+        while (offset < file.size && isBroadcastingMedia) {
+            const slice = file.slice(offset, offset + chunkSize);
+            const sliceBuf = await slice.arrayBuffer();
+            offset += sliceBuf.byteLength;
+            const isLast = (offset >= file.size);
+
+            const encRes = window.BadHub.encryptBlossomChunk(new Uint8Array(sliceBuf), isLast);
+            if (!encRes || !encRes.success) {
+                throw new Error(encRes ? encRes.error : "Chunk encryption failed");
+            }
+            sealedChunks.push(encRes.sealed);
+        }
+
+        const encryptedBlob = new Blob(sealedChunks, { type: "application/octet-stream" });
+        statusEl.innerText = `Uploading ${formatBytes(encryptedBlob.size)} to Blossom Relay...`;
+
+        const uploadResp = await fetch(`${server}/upload`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: encryptedBlob
+        });
+
+        if (!uploadResp.ok) {
+            throw new Error(`Blossom upload failed with status HTTP ${uploadResp.status}`);
+        }
+
+        const data = await uploadResp.json();
+        const blobSha256 = (data && (data.sha256 || data.url)) ? (data.sha256 || data.url.split("/").pop()) : "";
+
+        statusEl.innerText = "Broadcasting (Blossom Asynchronous Stream Ready)";
+        const streamUrl = `${window.location.origin}${window.location.pathname}#stream=blossom&blob=${encodeURIComponent(blobSha256)}&server=${encodeURIComponent(server)}&key=${encodeURIComponent(passphrase)}&name=${encodeURIComponent(file.name)}&type=${encodeURIComponent(file.type || "video/mp4")}&size=${file.size}`;
+        linkInput.value = streamUrl;
+        renderMediaQr(streamUrl);
+    } catch (err) {
+        statusEl.innerText = "Error: " + err.message;
+        alert("Blossom Broadcast Error: " + err.message);
+        stopMediaBroadcast();
+    }
+}
+
+function renderMediaQr(text) {
+    const qrDiv = document.getElementById("mediaQrCode");
+    if (!qrDiv) return;
+    qrDiv.innerHTML = "";
+    if (typeof QRCode !== "undefined") {
+        mediaBroadcastQrInstance = new QRCode(qrDiv, {
+            text: text,
+            width: 180,
+            height: 180,
+            colorDark: "#00f0ff",
+            colorLight: "#0a0e17",
+            correctLevel: QRCode.CorrectLevel.M
+        });
+    }
+}
+
+function copyMediaStreamLink() {
+    const linkInput = document.getElementById("mediaStreamLinkInput");
+    if (linkInput && linkInput.value) {
+        navigator.clipboard.writeText(linkInput.value).then(() => {
+            alert("Stream link copied to clipboard!");
+        }).catch(() => {
+            linkInput.select();
+            document.execCommand("copy");
+            alert("Stream link copied!");
+        });
+    }
+}
+
+function toggleMediaQr() {
+    const c = document.getElementById("mediaQrContainer");
+    if (c) c.classList.toggle("hidden");
+}
+
+function stopMediaBroadcast() {
+    isBroadcastingMedia = false;
+    if (mediaBroadcastPeer) {
+        mediaBroadcastPeer.destroy();
+        mediaBroadcastPeer = null;
+    }
+    mediaActiveViewers.clear();
+
+    document.getElementById("btnStartBroadcast").classList.remove("hidden");
+    document.getElementById("btnStopBroadcast").classList.add("hidden");
+    document.getElementById("mediaBroadcastActiveCard").classList.add("hidden");
 
     if (window.BadHub && window.BadHub.resetSession) {
         window.BadHub.resetSession();
     }
+    if (window.BadHub && window.BadHub.resetBlossomSession) {
+        window.BadHub.resetBlossomSession();
+    }
+}
 
-    btn.disabled = false;
+// ------------------------------------------
+// VIEWER / PLAYBACK LOGIC (Visionner en Direct)
+// ------------------------------------------
+
+async function startStreamingPlayback(customParam) {
+    const inputVal = (typeof customParam === "string" && customParam.length > 0)
+        ? customParam
+        : document.getElementById("mediaStreamInput").value.trim();
+
+    if (!inputVal) {
+        alert("Please enter a stream link, room code, or Blossom URL.");
+        return;
+    }
+
+    acquireWakeLock();
+    isStreamingPlayback = true;
+    mediaTotalReceivedBytes = 0;
+    mediaTotalFileSize = 0;
+    mediaDecryptedChunks = [];
+    initialBlobLoaded = false;
+    mediaPlaybackStartTime = performance.now();
+
+    document.getElementById("btnConnectStream").classList.add("hidden");
+    document.getElementById("btnDisconnectStream").classList.remove("hidden");
+    document.getElementById("mediaPlayerCard").classList.remove("hidden");
+    document.getElementById("mediaStreamSaveContainer").classList.add("hidden");
+
+    const statusDot = document.getElementById("streamPlayerStatusDot");
+    const playbackState = document.getElementById("streamPlaybackState");
+    const titleText = document.getElementById("streamTitleText");
+    const liveBadge = document.getElementById("streamLiveBadge");
+    const bufferingOverlay = document.getElementById("playerBufferingOverlay");
+
+    statusDot.className = "status-dot loading";
+    playbackState.innerText = "Connecting to media stream...";
+    bufferingOverlay.classList.remove("hidden");
+
+    let params = null;
+    if (inputVal.includes("#")) {
+        params = new URLSearchParams(inputVal.substring(inputVal.indexOf("#") + 1));
+    } else if (inputVal.includes("?")) {
+        params = new URLSearchParams(inputVal.substring(inputVal.indexOf("?") + 1));
+    } else if (inputVal.startsWith("stream=")) {
+        params = new URLSearchParams(inputVal);
+    }
+
+    const streamMode = params ? params.get("stream") : null;
+    const roomCode = params ? (params.get("room") || params.get("id")) : inputVal;
+    const passphrase = (params && params.get("key")) ? params.get("key") : (document.getElementById("mediaWatchPassphrase").value.trim() || "badhub-live-stream-v1");
+    const streamName = params ? (params.get("name") || "live-stream.mp4") : "live-stream.mp4";
+    const streamType = params ? (params.get("type") || "video/mp4") : "video/mp4";
+    const streamSize = params ? parseInt(params.get("size"), 10) : 0;
+
+    currentStreamFileName = streamName;
+    mediaStreamMime = streamType;
+    mediaTotalFileSize = streamSize;
+    titleText.innerText = `${streamName} ${streamSize > 0 ? '(' + formatBytes(streamSize) + ')' : ''}`;
+
+    const opfsEnabled = document.getElementById("mediaOpfsToggle").checked;
+    if (opfsEnabled && typeof navigator !== "undefined" && navigator.storage && typeof navigator.storage.getDirectory === "function") {
+        try {
+            const root = await navigator.storage.getDirectory();
+            const safeName = streamName.replace(/[/\\?%*:|"<>]/g, '_');
+            mediaOpfsFileHandle = await root.getFileHandle(safeName, { create: true });
+            mediaOpfsWritable = await mediaOpfsFileHandle.createWritable();
+        } catch (e) {
+            console.warn("OPFS stream init bypassed, continuing in memory:", e);
+        }
+    }
+
+    initMediaPlayerViewport(streamName, streamType, streamSize);
+
+    if (streamMode === "blossom" || (params && params.get("blob"))) {
+        liveBadge.innerText = "BLOSSOM STREAM";
+        liveBadge.style.display = "inline-block";
+        const blobId = params.get("blob");
+        const server = params.get("server") || "https://nostr.download";
+        const fullUrl = blobId.startsWith("http") ? blobId : `${server.replace(/\/+$/, "")}/${blobId}`;
+        await playBlossomStream(fullUrl, passphrase);
+    } else {
+        liveBadge.innerText = "LIVE P2P";
+        liveBadge.style.display = "inline-block";
+        await playWebRtcStream(roomCode, passphrase);
+    }
+}
+
+function initMediaPlayerViewport(name, mime, size) {
+    activeStreamId = "bh_stream_" + Date.now();
+    const videoEl = document.getElementById("mediaStreamVideo");
+    const audioBox = document.getElementById("mediaAudioVisualizer");
+    const audioLabel = document.getElementById("audioStreamLabel");
+
+    const isAudio = mime.startsWith("audio/");
+    if (isAudio) {
+        videoEl.classList.add("hidden");
+        audioBox.classList.remove("hidden");
+        audioLabel.innerText = `Audio Stream: ${name}`;
+    } else {
+        videoEl.classList.remove("hidden");
+        audioBox.classList.add("hidden");
+    }
+
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        swStreamActive = true;
+        navigator.serviceWorker.controller.postMessage({
+            type: "INIT_STREAM",
+            streamId: activeStreamId,
+            mimeType: mime,
+            fileSize: size
+        });
+        videoEl.src = `badhub-stream/?id=${activeStreamId}`;
+        videoEl.play().catch(e => console.log("Stream autoplay waiting for gesture:", e));
+    } else if (window.MediaSource && MediaSource.isTypeSupported(mime)) {
+        try {
+            const ms = new MediaSource();
+            videoEl.src = URL.createObjectURL(ms);
+            ms.addEventListener("sourceopen", () => {
+                try {
+                    activeSourceBuffer = ms.addSourceBuffer(mime);
+                } catch (e) {
+                    console.warn("MSE initialization warning:", e);
+                }
+            });
+            videoEl.play().catch(() => {});
+        } catch (_) {}
+    }
+}
+
+async function playWebRtcStream(roomCode, passphrase) {
+    const statusDot = document.getElementById("streamPlayerStatusDot");
+    const playbackState = document.getElementById("streamPlaybackState");
+    const bufferingOverlay = document.getElementById("playerBufferingOverlay");
+
+    try {
+        const turnConf = getTurnConfig();
+        try {
+            mediaViewerPeer = new Peer(turnConf);
+        } catch (_) {
+            mediaViewerPeer = new Peer();
+        }
+
+        mediaViewerPeer.on("open", () => {
+            playbackState.innerText = "Connecting to broadcaster swarm...";
+            mediaViewerConn = mediaViewerPeer.connect(roomCode, { reliable: true });
+
+            mediaViewerConn.on("open", () => {
+                statusDot.className = "status-dot ready";
+                playbackState.innerText = "Connected! Buffering initial packets...";
+            });
+
+            mediaViewerConn.on("data", async data => {
+                if (!isStreamingPlayback) return;
+
+                if (typeof data === "string") {
+                    try {
+                        const msg = JSON.parse(data);
+                        if (msg.type === "BH_MEDIA_STREAM_HEADER") {
+                            const metaBytes = new Uint8Array(msg.meta);
+                            const onChunkDecoded = chunk => {
+                                feedDecryptedMediaChunk(chunk);
+                            };
+
+                            const initRes = window.BadHub.initReceiver(metaBytes, passphrase, onChunkDecoded);
+                            if (!initRes || !initRes.success) {
+                                throw new Error("Metadata decryption failed: " + (initRes ? initRes.error : "incorrect passphrase"));
+                            }
+                            playbackState.innerText = "Playing live stream";
+                            bufferingOverlay.classList.add("hidden");
+                        }
+                    } catch (e) {
+                        console.warn("Stream header parse error:", e);
+                    }
+                    return;
+                }
+
+                const frameBytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+                const ingestRes = window.BadHub.ingestReceiverFrame(frameBytes);
+
+                const stats = window.BadHub.getReceiverStats ? window.BadHub.getReceiverStats() : null;
+                if (stats) {
+                    const rlncEl = document.getElementById("streamMetricRlnc");
+                    if (rlncEl) rlncEl.innerText = `${stats.droppedPackets || 0} dropped / ${stats.recoveredPackets || 0} rec`;
+                }
+            });
+
+            mediaViewerConn.on("close", () => {
+                finalizeMediaStreamPlayback();
+            });
+
+            mediaViewerConn.on("error", err => {
+                playbackState.innerText = "Connection error: " + err.message;
+            });
+        });
+
+        mediaViewerPeer.on("error", err => {
+            statusDot.className = "status-dot error";
+            playbackState.innerText = "Stream unavailable: " + (err.type === "peer-unavailable" ? "Broadcaster is offline" : err.type);
+            bufferingOverlay.classList.add("hidden");
+        });
+
+    } catch (err) {
+        statusDot.className = "status-dot error";
+        playbackState.innerText = "Stream error: " + err.message;
+        bufferingOverlay.classList.add("hidden");
+    }
+}
+
+async function playBlossomStream(url, passphrase) {
+    const statusDot = document.getElementById("streamPlayerStatusDot");
+    const playbackState = document.getElementById("streamPlaybackState");
+    const bufferingOverlay = document.getElementById("playerBufferingOverlay");
+
+    mediaBlossomAbortController = new AbortController();
+
+    try {
+        const resp = await fetch(url, { signal: mediaBlossomAbortController.signal });
+        if (!resp.ok) {
+            throw new Error(`Failed to fetch Blossom blob (HTTP ${resp.status})`);
+        }
+
+        statusDot.className = "status-dot ready";
+        playbackState.innerText = "Streaming from Blossom Relays...";
+
+        const reader = resp.body.getReader();
+        let streamBuf = new Uint8Array(0);
+        let decryptorReady = false;
+
+        function appendBuf(a, b) {
+            const res = new Uint8Array(a.length + b.length);
+            res.set(a, 0);
+            res.set(b, a.length);
+            return res;
+        }
+
+        while (isStreamingPlayback) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            streamBuf = appendBuf(streamBuf, value);
+
+            if (!decryptorReady && streamBuf.length >= 8) {
+                const metaLen = new DataView(streamBuf.buffer, streamBuf.byteOffset, streamBuf.byteLength).getUint32(4, false);
+                const reqHeaderLen = 8 + metaLen;
+                if (streamBuf.length >= reqHeaderLen) {
+                    const headerSlice = streamBuf.slice(0, reqHeaderLen);
+                    const initRes = window.BadHub.initBlossomDecryptor(headerSlice, passphrase);
+                    if (!initRes || !initRes.success) {
+                        throw new Error("Decryption failed: " + (initRes ? initRes.error : "incorrect passphrase"));
+                    }
+                    decryptorReady = true;
+                    streamBuf = streamBuf.slice(reqHeaderLen);
+                    bufferingOverlay.classList.add("hidden");
+                    playbackState.innerText = "Playing live stream";
+                }
+            }
+
+            while (decryptorReady && streamBuf.length >= 4) {
+                const chunkLen = new DataView(streamBuf.buffer, streamBuf.byteOffset, streamBuf.byteLength).getUint32(0, false);
+                if (streamBuf.length < 4 + chunkLen) break;
+
+                const sealedChunk = streamBuf.slice(4, 4 + chunkLen);
+                streamBuf = streamBuf.slice(4 + chunkLen);
+
+                const decRes = window.BadHub.decryptBlossomChunk(sealedChunk);
+                if (!decRes || !decRes.success) {
+                    throw new Error("Chunk decryption failed: " + (decRes ? decRes.error : "corrupted"));
+                }
+
+                feedDecryptedMediaChunk(decRes.chunk);
+            }
+        }
+
+        const finalRes = window.BadHub.finalizeBlossomDecryption();
+        if (finalRes && finalRes.success) {
+            const integrityEl = document.getElementById("streamMetricIntegrity");
+            if (integrityEl) {
+                integrityEl.innerText = "100% BIT-EXACT";
+                integrityEl.className = "metric-value highlight-text";
+            }
+        }
+
+        finalizeMediaStreamPlayback();
+    } catch (err) {
+        if (isStreamingPlayback) {
+            statusDot.className = "status-dot error";
+            playbackState.innerText = "Stream error: " + err.message;
+            bufferingOverlay.classList.add("hidden");
+        }
+    }
+}
+
+function feedDecryptedMediaChunk(chunk) {
+    if (!chunk || chunk.length === 0) return;
+
+    mediaTotalReceivedBytes += chunk.length;
+    mediaDecryptedChunks.push(chunk);
+
+    if (mediaOpfsWritable) {
+        mediaOpfsWritable.write(chunk).catch(() => {});
+    }
+
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+            type: "PUSH_CHUNK",
+            streamId: activeStreamId,
+            chunk: chunk
+        });
+    }
+
+    if (activeSourceBuffer && !activeSourceBuffer.updating) {
+        try {
+            activeSourceBuffer.appendBuffer(chunk);
+        } catch (_) {}
+    }
+
+    if (!swStreamActive && !activeSourceBuffer && mediaTotalReceivedBytes >= 512 * 1024 && !initialBlobLoaded) {
+        initialBlobLoaded = true;
+        const videoEl = document.getElementById("mediaStreamVideo");
+        const blob = new Blob(mediaDecryptedChunks, { type: mediaStreamMime || "video/mp4" });
+        videoEl.src = URL.createObjectURL(blob);
+        videoEl.play().catch(() => {});
+        document.getElementById("playerBufferingOverlay").classList.add("hidden");
+    }
+
+    updateStreamTelemetry();
+}
+
+function updateStreamTelemetry() {
+    const bufferEl = document.getElementById("streamMetricBuffer");
+    const speedEl = document.getElementById("streamMetricSpeed");
+    const bufferBar = document.getElementById("streamBufferBar");
+
+    if (bufferEl) bufferEl.innerText = formatBytes(mediaTotalReceivedBytes);
+
+    const elapsed = (performance.now() - mediaPlaybackStartTime) / 1000;
+    if (elapsed > 0 && speedEl) {
+        const mbps = (mediaTotalReceivedBytes / 1048576) / elapsed;
+        speedEl.innerText = `${mbps.toFixed(2)} MB/s`;
+    }
+
+    if (mediaTotalFileSize > 0 && bufferBar) {
+        const pct = Math.min(100, Math.round((mediaTotalReceivedBytes / mediaTotalFileSize) * 100));
+        bufferBar.style.width = pct + "%";
+    }
+}
+
+async function finalizeMediaStreamPlayback() {
+    const playbackState = document.getElementById("streamPlaybackState");
+    const saveContainer = document.getElementById("mediaStreamSaveContainer");
+    const bufferingOverlay = document.getElementById("playerBufferingOverlay");
+
+    bufferingOverlay.classList.add("hidden");
+    if (playbackState) playbackState.innerText = "Stream Playback Ready";
+    if (saveContainer) saveContainer.classList.remove("hidden");
+
+    if (mediaOpfsWritable) {
+        try {
+            await mediaOpfsWritable.close();
+            mediaOpfsWritable = null;
+        } catch (_) {}
+    }
+
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+            type: "END_STREAM",
+            streamId: activeStreamId
+        });
+    }
+}
+
+function stopStreamingPlayback() {
+    isStreamingPlayback = false;
+    releaseWakeLock();
+
+    const videoEl = document.getElementById("mediaStreamVideo");
+    if (videoEl) {
+        videoEl.pause();
+        videoEl.src = "";
+    }
+
+    if (mediaViewerPeer) {
+        mediaViewerPeer.destroy();
+        mediaViewerPeer = null;
+    }
+    if (mediaBlossomAbortController) {
+        mediaBlossomAbortController.abort();
+        mediaBlossomAbortController = null;
+    }
+
+    document.getElementById("btnConnectStream").classList.remove("hidden");
+    document.getElementById("btnDisconnectStream").classList.add("hidden");
+    document.getElementById("playerBufferingOverlay").classList.add("hidden");
+    document.getElementById("streamPlaybackState").innerText = "Playback stopped";
+    document.getElementById("streamPlayerStatusDot").className = "status-dot";
+
+    if (window.BadHub && window.BadHub.resetSession) {
+        window.BadHub.resetSession();
+    }
+    if (window.BadHub && window.BadHub.resetBlossomSession) {
+        window.BadHub.resetBlossomSession();
+    }
+}
+
+async function saveStreamedMediaFile() {
+    if (mediaOpfsFileHandle) {
+        try {
+            const file = await mediaOpfsFileHandle.getFile();
+            triggerMediaBlobDownload(file, currentStreamFileName);
+            return;
+        } catch (_) {}
+    }
+
+    if (mediaDecryptedChunks && mediaDecryptedChunks.length > 0) {
+        const blob = new Blob(mediaDecryptedChunks, { type: mediaStreamMime || "application/octet-stream" });
+        triggerMediaBlobDownload(blob, currentStreamFileName);
+    }
+}
+
+function triggerMediaBlobDownload(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name || "streamed-media.mp4";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 // Utility: Format bytes
@@ -2286,5 +2948,48 @@ window.addEventListener("DOMContentLoaded", () => {
             diskBadge.innerText = "Not Supported (Memory Mode)";
             diskBadge.title = "Browser lacks File System Access / OPFS API support";
         }
+    }
+
+    // Setup Service Worker for in-browser video & audio streaming
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw-stream.js?v=1.8.0', { scope: './' })
+            .then(reg => {
+                console.log('Stream ServiceWorker registered with scope:', reg.scope);
+            })
+            .catch(err => {
+                console.warn('Stream ServiceWorker registration bypassed:', err);
+            });
+    }
+
+    // Media Dropzone Setup
+    const mediaDrop = document.getElementById("mediaDropzone");
+    const mediaInput = document.getElementById("mediaFileInput");
+    if (mediaDrop && mediaInput) {
+        ["dragenter", "dragover"].forEach(eventName => {
+            mediaDrop.addEventListener(eventName, e => {
+                e.preventDefault();
+                mediaDrop.classList.add("dragover");
+            }, false);
+        });
+
+        ["dragleave", "drop"].forEach(eventName => {
+            mediaDrop.addEventListener(eventName, e => {
+                e.preventDefault();
+                mediaDrop.classList.remove("dragover");
+            }, false);
+        });
+
+        mediaDrop.addEventListener("drop", e => {
+            const dt = e.dataTransfer;
+            if (dt && dt.files && dt.files.length > 0) {
+                handleMediaFileSelected(dt.files[0]);
+            }
+        });
+
+        mediaInput.addEventListener("change", e => {
+            if (e.target.files && e.target.files.length > 0) {
+                handleMediaFileSelected(e.target.files[0]);
+            }
+        });
     }
 });
