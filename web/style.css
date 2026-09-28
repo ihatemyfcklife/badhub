@@ -116,6 +116,15 @@ body {
     text-transform: uppercase;
 }
 
+.logo-tagline {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    opacity: 0.6;
+}
+
 .engine-status {
     display: flex;
     align-items: center;
