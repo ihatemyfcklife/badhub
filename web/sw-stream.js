@@ -21,34 +21,18 @@ self.addEventListener('message', event => {
             fileSize: data.fileSize || 0,
             chunks: [],
             totalReceived: 0,
-            finished: false,
-            controller: null
+            finished: false
         });
     } else if (data.type === 'PUSH_CHUNK') {
         const stream = streamRegistry.get(data.streamId);
         if (!stream) return;
         const chunk = new Uint8Array(data.chunk);
+        stream.chunks.push(chunk);
         stream.totalReceived += chunk.length;
-
-        if (stream.controller) {
-            try {
-                stream.controller.enqueue(chunk);
-            } catch (e) {
-                console.warn("ServiceWorker enqueue warning:", e);
-            }
-        } else {
-            stream.chunks.push(chunk);
-        }
     } else if (data.type === 'END_STREAM') {
         const stream = streamRegistry.get(data.streamId);
         if (!stream) return;
         stream.finished = true;
-        if (stream.controller) {
-            try {
-                stream.controller.close();
-            } catch (e) {}
-            stream.controller = null;
-        }
     } else if (data.type === 'RESET_STREAM') {
         streamRegistry.delete(data.streamId);
     }
@@ -66,57 +50,59 @@ self.addEventListener('fetch', event => {
         }
 
         const rangeHeader = event.request.headers.get('range');
-        const fileSize = stream.fileSize;
-        const mimeType = stream.mimeType;
+        const fileSize = stream.fileSize || 0;
+        const mimeType = stream.mimeType || 'video/mp4';
 
-        let start = 0;
-        let end = fileSize ? fileSize - 1 : undefined;
+        // Build accumulated blob from all currently received chunks without shifting or destroying data
+        const blob = new Blob(stream.chunks, { type: mimeType });
+        const availableBytes = blob.size;
 
         if (rangeHeader) {
             const matches = rangeHeader.match(/bytes=(\d+)-(\d*)/);
             if (matches) {
-                start = parseInt(matches[1], 10);
-                if (matches[2]) {
-                    end = parseInt(matches[2], 10);
+                const start = parseInt(matches[1], 10);
+                let end = matches[2] ? parseInt(matches[2], 10) : (fileSize > 0 ? fileSize - 1 : availableBytes - 1);
+                if (end >= availableBytes && !stream.finished) {
+                    end = availableBytes > 0 ? availableBytes - 1 : 0;
+                }
+
+                if (start < availableBytes) {
+                    const slice = blob.slice(start, end + 1);
+                    const totalLenStr = (fileSize > 0) ? String(fileSize) : (stream.finished ? String(availableBytes) : '*');
+                    event.respondWith(new Response(slice, {
+                        status: 206,
+                        headers: {
+                            'Content-Type': mimeType,
+                            'Content-Range': `bytes ${start}-${end}/${totalLenStr}`,
+                            'Content-Length': String(slice.size),
+                            'Accept-Ranges': 'bytes',
+                            'Cache-Control': 'no-cache, no-store'
+                        }
+                    }));
+                    return;
                 }
             }
         }
 
-        const readableStream = new ReadableStream({
-            start(controller) {
-                stream.controller = controller;
-                while (stream.chunks.length > 0) {
-                    const c = stream.chunks.shift();
-                    controller.enqueue(c);
-                }
-                if (stream.finished) {
-                    controller.close();
-                    stream.controller = null;
-                }
-            },
-            cancel() {
-                stream.controller = null;
-            }
-        });
-
+        // Default response: Return currently available stream buffer with 200 or 206
         const headers = {
             'Content-Type': mimeType,
             'Accept-Ranges': 'bytes',
-            'Cache-Control': 'no-cache, no-store'
+            'Cache-Control': 'no-cache, no-store',
+            'Content-Length': String(availableBytes)
         };
 
-        let status = 200;
-        if (fileSize > 0) {
-            headers['Content-Length'] = String(fileSize - start);
-            if (rangeHeader) {
-                status = 206;
-                headers['Content-Range'] = `bytes ${start}-${end}/${fileSize}`;
-            }
+        if (fileSize > 0 && availableBytes < fileSize) {
+            headers['Content-Range'] = `bytes 0-${availableBytes > 0 ? availableBytes - 1 : 0}/${fileSize}`;
+            event.respondWith(new Response(blob, {
+                status: 206,
+                headers: headers
+            }));
+        } else {
+            event.respondWith(new Response(blob, {
+                status: 200,
+                headers: headers
+            }));
         }
-
-        event.respondWith(new Response(readableStream, {
-            status: status,
-            headers: headers
-        }));
     }
 });

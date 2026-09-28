@@ -73,7 +73,7 @@ func safeJsFunc(fn func(this js.Value, args []js.Value) any) js.Func {
 func main() {
 	hub := js.Global().Get("Object").New()
 
-	hub.Set("version", "1.8.2")
+	hub.Set("version", "1.9.1")
 	hub.Set("ready", true)
 	hub.Set("createSha256", safeJsFunc(jsCreateSha256))
 	hub.Set("updateSha256", safeJsFunc(jsUpdateSha256))
@@ -788,6 +788,7 @@ func jsEncryptBlossomChunk(this js.Value, args []js.Value) any {
 	res := js.Global().Get("Object").New()
 	res.Set("success", true)
 	res.Set("chunk", jsSealed)
+	res.Set("sealed", jsSealed)
 	return res
 }
 
@@ -851,6 +852,7 @@ func jsDecryptBlossomChunk(this js.Value, args []js.Value) any {
 	res := js.Global().Get("Object").New()
 	res.Set("success", true)
 	res.Set("chunk", jsPlain)
+	res.Set("plain", jsPlain)
 	res.Set("bytesRead", float64(dec.BytesRead()))
 	res.Set("totalSize", float64(dec.TotalSize()))
 	return res

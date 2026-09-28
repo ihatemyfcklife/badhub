@@ -44,7 +44,7 @@ async function initWasm() {
     const go = new Go();
 
     try {
-        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.8.2"), go.importObject);
+        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.9.1"), go.importObject);
         go.run(result.instance);
 
         // Await BadHub global bridge initialization
@@ -56,7 +56,7 @@ async function initWasm() {
 
         if (window.BadHub && window.BadHub.ready) {
             statusDot.className = "status-dot ready";
-            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.8.2";
+            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.9.1";
             statusText.innerText = "Engine Ready (" + ver + ")";
             checkSenderReady();
             checkUrlHash();
@@ -75,7 +75,7 @@ async function fetchGitHubBadHubVersion() {
     try {
         // 1. Check static version.json first (instant, unaffected by GitHub API rate limits)
         try {
-            const localResp = await fetch("version.json?v=1.8.2");
+            const localResp = await fetch("version.json?v=1.9.1");
             if (localResp.ok) {
                 const localData = await localResp.json();
                 if (localData && localData.version) {
@@ -467,6 +467,10 @@ function getPeerJsOptions(forSender) {
         },
         debug: 1
     };
+}
+
+function getTurnConfig(forSender = true) {
+    return getPeerJsOptions(forSender);
 }
 
 function toggleSendRelay(checked) {
@@ -891,12 +895,36 @@ function connectToRoom(roomId) {
     }
 }
 
-// URL Hash Deep Linking (#room=...&key=...)
+// URL Hash Deep Linking (#room=...&key=... or #stream=...)
 function checkUrlHash() {
     const rawHash = window.location.hash.substring(1);
     if (!rawHash) return;
 
     const params = new URLSearchParams(rawHash);
+    const stream = params.get("stream");
+
+    // 1. Handle media stream links (#stream=p2p or #stream=blossom)
+    if (stream || rawHash.startsWith("stream=")) {
+        switchTab("media");
+        switchMediaMode("watch");
+        const streamInput = document.getElementById("mediaStreamInput");
+        if (streamInput) streamInput.value = window.location.href;
+        const key = params.get("key");
+        if (key) {
+            const watchPass = document.getElementById("mediaWatchPassphrase");
+            if (watchPass) watchPass.value = key;
+        }
+        const tryAutoPlay = () => {
+            if (window.BadHub && window.BadHub.ready) {
+                startStreamingPlayback(window.location.href);
+            } else {
+                setTimeout(tryAutoPlay, 100);
+            }
+        };
+        tryAutoPlay();
+        return;
+    }
+
     const room = params.get("room");
     const key = params.get("key");
     const relay = params.get("relay");
@@ -2284,9 +2312,9 @@ async function startMediaBroadcast() {
         statusEl.innerText = "Initializing P2P Room...";
         const streamRoomId = "bh-stream-" + Math.random().toString(36).substring(2, 10);
 
-        const turnConf = getTurnConfig();
         try {
-            mediaBroadcastPeer = new Peer(streamRoomId, turnConf);
+            const peerOptions = getPeerJsOptions(true);
+            mediaBroadcastPeer = new Peer(streamRoomId, peerOptions);
         } catch (e) {
             mediaBroadcastPeer = new Peer(streamRoomId);
         }
@@ -2299,11 +2327,20 @@ async function startMediaBroadcast() {
         });
 
         mediaBroadcastPeer.on("connection", conn => {
-            conn.on("open", async () => {
+            const onConnOpen = async () => {
+                if (conn.dataChannel) {
+                    conn.dataChannel.binaryType = "arraybuffer";
+                }
                 mediaActiveViewers.set(conn.peer, conn);
                 updateViewerCount();
                 await streamMediaToViewer(conn, passphrase, redundancy);
-            });
+            };
+
+            if (conn.open) {
+                onConnOpen();
+            } else {
+                conn.on("open", onConnOpen);
+            }
 
             conn.on("close", () => {
                 mediaActiveViewers.delete(conn.peer);
@@ -2353,7 +2390,12 @@ async function streamMediaToViewer(conn, passphrase, redundancy) {
             mime: file.type || "video/mp4",
             meta: Array.from(senderRes.encryptedMetadata)
         };
-        conn.send(JSON.stringify(headerPayload));
+        const headerStr = JSON.stringify(headerPayload);
+        for (let i = 0; i < 3; i++) {
+            if (!conn.open) break;
+            conn.send(headerStr);
+            await new Promise(r => setTimeout(r, 20));
+        }
 
         let chunksStreamed = 0;
         const chunksEl = document.getElementById("mediaChunksStreamed");
@@ -2422,8 +2464,12 @@ async function broadcastViaBlossom(passphrase) {
             if (!encRes || !encRes.success) {
                 throw new Error(encRes ? encRes.error : "Chunk encryption failed");
             }
-            sealedChunks.push(encRes.sealed);
-            window.BadHub.updateSha256(blobHasherId, encRes.sealed);
+            const chunkData = encRes.chunk || encRes.sealed;
+            if (!chunkData) {
+                throw new Error("Encrypted chunk returned empty data");
+            }
+            sealedChunks.push(chunkData);
+            window.BadHub.updateSha256(blobHasherId, chunkData);
 
             const encPct = Math.round((offset / file.size) * 100);
             statusEl.innerText = `Encrypting stream chunks (${encPct}%)...`;
@@ -2683,12 +2729,25 @@ async function startStreamingPlayback(customParam) {
 
     initMediaPlayerViewport(streamName, streamType, streamSize);
 
-    if (streamMode === "blossom" || (params && params.get("blob"))) {
+    if (streamMode === "blossom" || (params && params.get("blob")) || inputVal.includes("nostr.download") || inputVal.includes("primal.net") || (inputVal.length === 64 && /^[0-9a-fA-F]{64}$/.test(inputVal))) {
         liveBadge.innerText = "BLOSSOM STREAM";
         liveBadge.style.display = "inline-block";
-        const blobId = params.get("blob");
-        const server = params.get("server") || "https://nostr.download";
-        const fullUrl = blobId.startsWith("http") ? blobId : `${server.replace(/\/+$/, "")}/${blobId}`;
+        let blobId = params ? params.get("blob") : null;
+        let server = params ? (params.get("server") || "https://nostr.download") : "https://nostr.download";
+        if (!blobId) {
+            if (inputVal.startsWith("http")) {
+                try {
+                    const u = new URL(inputVal);
+                    server = u.origin;
+                    blobId = u.pathname.replace(/^\/+/, "");
+                } catch (_) {
+                    blobId = inputVal;
+                }
+            } else if (inputVal.length === 64) {
+                blobId = inputVal;
+            }
+        }
+        const fullUrl = (blobId && blobId.startsWith("http")) ? blobId : `${server.replace(/\/+$/, "")}/${blobId || ''}`;
         await playBlossomStream(fullUrl, passphrase);
     } else {
         liveBadge.innerText = "LIVE P2P";
@@ -2711,6 +2770,25 @@ function initMediaPlayerViewport(name, mime, size) {
     } else {
         videoEl.classList.remove("hidden");
         audioBox.classList.add("hidden");
+    }
+
+    if (videoEl) {
+        videoEl.onplaying = () => {
+            const overlay = document.getElementById("playerBufferingOverlay");
+            if (overlay) overlay.classList.add("hidden");
+            const playbackState = document.getElementById("streamPlaybackState");
+            if (playbackState && playbackState.innerText.includes("Buffering")) {
+                playbackState.innerText = "Playing stream";
+            }
+        };
+        videoEl.oncanplay = () => {
+            const overlay = document.getElementById("playerBufferingOverlay");
+            if (overlay) overlay.classList.add("hidden");
+        };
+        videoEl.onerror = () => {
+            console.warn("Video element stream source warning, falling back to direct blob buffering");
+            swStreamActive = false;
+        };
     }
 
     if (navigator.serviceWorker && navigator.serviceWorker.controller) {
@@ -2745,21 +2823,36 @@ async function playWebRtcStream(roomCode, passphrase) {
     const bufferingOverlay = document.getElementById("playerBufferingOverlay");
 
     try {
-        const turnConf = getTurnConfig();
         try {
-            mediaViewerPeer = new Peer(turnConf);
+            const peerOptions = getPeerJsOptions(false);
+            mediaViewerPeer = new Peer(peerOptions);
         } catch (_) {
             mediaViewerPeer = new Peer();
         }
 
         mediaViewerPeer.on("open", () => {
             playbackState.innerText = "Connecting to broadcaster swarm...";
-            mediaViewerConn = mediaViewerPeer.connect(roomCode, { reliable: true });
+            mediaViewerConn = mediaViewerPeer.connect(roomCode, {
+                reliable: true,
+                serialization: "raw"
+            });
 
-            mediaViewerConn.on("open", () => {
+            let isReceiverInitialized = false;
+            const pendingFrames = [];
+
+            const onConnOpen = () => {
+                if (mediaViewerConn.dataChannel) {
+                    mediaViewerConn.dataChannel.binaryType = "arraybuffer";
+                }
                 statusDot.className = "status-dot ready";
                 playbackState.innerText = "Connected! Buffering initial packets...";
-            });
+            };
+
+            if (mediaViewerConn.open) {
+                onConnOpen();
+            } else {
+                mediaViewerConn.on("open", onConnOpen);
+            }
 
             mediaViewerConn.on("data", async data => {
                 if (!isStreamingPlayback) return;
@@ -2768,6 +2861,7 @@ async function playWebRtcStream(roomCode, passphrase) {
                     try {
                         const msg = JSON.parse(data);
                         if (msg.type === "BH_MEDIA_STREAM_HEADER") {
+                            if (isReceiverInitialized) return;
                             const metaBytes = new Uint8Array(msg.meta);
                             const onChunkDecoded = chunk => {
                                 feedDecryptedMediaChunk(chunk);
@@ -2777,8 +2871,17 @@ async function playWebRtcStream(roomCode, passphrase) {
                             if (!initRes || !initRes.success) {
                                 throw new Error("Metadata decryption failed: " + (initRes ? initRes.error : "incorrect passphrase"));
                             }
+                            isReceiverInitialized = true;
                             playbackState.innerText = "Playing live stream";
                             bufferingOverlay.classList.add("hidden");
+
+                            while (pendingFrames.length > 0) {
+                                const earlyFrame = pendingFrames.shift();
+                                const r = window.BadHub.ingestReceiverFrame(earlyFrame);
+                                if (r && r.completed) {
+                                    finalizeMediaStreamPlayback();
+                                }
+                            }
                         }
                     } catch (e) {
                         console.warn("Stream header parse error:", e);
@@ -2787,7 +2890,15 @@ async function playWebRtcStream(roomCode, passphrase) {
                 }
 
                 const frameBytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+                if (!isReceiverInitialized) {
+                    pendingFrames.push(frameBytes);
+                    return;
+                }
+
                 const ingestRes = window.BadHub.ingestReceiverFrame(frameBytes);
+                if (ingestRes && ingestRes.completed) {
+                    finalizeMediaStreamPlayback();
+                }
 
                 const stats = window.BadHub.getReceiverStats ? window.BadHub.getReceiverStats() : null;
                 if (stats) {
@@ -2825,10 +2936,41 @@ async function playBlossomStream(url, passphrase) {
 
     mediaBlossomAbortController = new AbortController();
 
+    const urlsToTry = [url];
+    const hashMatch = url.match(/[0-9a-fA-F]{64}/);
+    if (hashMatch) {
+        const hash = hashMatch[0];
+        const fallbacks = ["https://nostr.download/" + hash, "https://blossom.primal.net/" + hash];
+        for (const fb of fallbacks) {
+            if (!urlsToTry.includes(fb)) urlsToTry.push(fb);
+        }
+    }
+
     try {
-        const resp = await fetch(url, { signal: mediaBlossomAbortController.signal });
-        if (!resp.ok) {
-            throw new Error(`Failed to fetch Blossom blob (HTTP ${resp.status})`);
+        let resp = null;
+        let lastErr = null;
+
+        for (const tryUrl of urlsToTry) {
+            if (!isStreamingPlayback) return;
+            try {
+                let host = tryUrl;
+                try { host = new URL(tryUrl).hostname; } catch (_) {}
+                playbackState.innerText = `Connecting to Blossom (${host})...`;
+                const r = await fetch(tryUrl, { signal: mediaBlossomAbortController.signal });
+                if (r.ok) {
+                    resp = r;
+                    break;
+                } else {
+                    console.warn(`Blossom fetch returned HTTP ${r.status} on ${tryUrl}`);
+                }
+            } catch (e) {
+                lastErr = e;
+                console.warn(`Blossom network error on ${tryUrl}:`, e);
+            }
+        }
+
+        if (!resp) {
+            throw new Error(lastErr ? lastErr.message : "Blossom server does not respond or media not found");
         }
 
         statusDot.className = "status-dot ready";
@@ -2879,7 +3021,8 @@ async function playBlossomStream(url, passphrase) {
                     throw new Error("Chunk decryption failed: " + (decRes ? decRes.error : "corrupted"));
                 }
 
-                feedDecryptedMediaChunk(decRes.chunk);
+                const plainData = decRes.chunk || decRes.plain;
+                feedDecryptedMediaChunk(plainData);
             }
         }
 
@@ -2926,7 +3069,7 @@ function feedDecryptedMediaChunk(chunk) {
         } catch (_) {}
     }
 
-    if (!swStreamActive && !activeSourceBuffer && mediaTotalReceivedBytes >= 512 * 1024 && !initialBlobLoaded) {
+    if (!swStreamActive && !activeSourceBuffer && mediaTotalReceivedBytes >= 256 * 1024 && !initialBlobLoaded) {
         initialBlobLoaded = true;
         const videoEl = document.getElementById("mediaStreamVideo");
         const blob = new Blob(mediaDecryptedChunks, { type: mediaStreamMime || "video/mp4" });
@@ -2961,10 +3104,19 @@ async function finalizeMediaStreamPlayback() {
     const playbackState = document.getElementById("streamPlaybackState");
     const saveContainer = document.getElementById("mediaStreamSaveContainer");
     const bufferingOverlay = document.getElementById("playerBufferingOverlay");
+    const videoEl = document.getElementById("mediaStreamVideo");
 
     bufferingOverlay.classList.add("hidden");
     if (playbackState) playbackState.innerText = "Stream Playback Ready";
     if (saveContainer) saveContainer.classList.remove("hidden");
+
+    if (videoEl && (!videoEl.src || videoEl.src === "" || videoEl.error || !initialBlobLoaded)) {
+        try {
+            const blob = new Blob(mediaDecryptedChunks, { type: mediaStreamMime || "video/mp4" });
+            videoEl.src = URL.createObjectURL(blob);
+            videoEl.play().catch(() => {});
+        } catch (_) {}
+    }
 
     if (mediaOpfsWritable) {
         try {
@@ -3087,7 +3239,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     // Setup Service Worker for in-browser video & audio streaming
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw-stream.js?v=1.8.2', { scope: './' })
+        navigator.serviceWorker.register('sw-stream.js?v=1.9.1', { scope: './' })
             .then(reg => {
                 console.log('Stream ServiceWorker registered with scope:', reg.scope);
             })
