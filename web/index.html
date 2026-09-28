@@ -620,32 +620,33 @@
                 </div>
 
                 <!-- Live Media Player Card -->
-                <div class="card stream-player-card" id="mediaPlayerCard">
-                    <div class="player-header">
-                        <div class="player-title-info">
+                <div class="card" id="mediaPlayerCard">
+                    <h2>Live Media Player</h2>
+                    <p class="desc" id="streamPlaybackState">Waiting for connection</p>
+
+                    <!-- Media Preview Box (same structure as Broadcast) -->
+                    <div class="media-preview-box" id="mediaPlayerPreviewBox">
+                        <div class="media-preview-header">
+                            <span class="media-preview-badge" id="streamLiveBadge" style="display: none;">LIVE P2P</span>
                             <span class="status-dot loading" id="streamPlayerStatusDot"></span>
-                            <span class="player-stream-title" id="streamTitleText">No Active Stream</span>
-                            <span class="privacy-badge badge-turn" id="streamLiveBadge" style="display: none;">LIVE P2P</span>
+                            <span class="media-preview-name" id="streamTitleText">No Active Stream</span>
                         </div>
-                        <span class="metric-value" id="streamPlaybackState" style="font-size: 0.85rem;">Waiting for connection</span>
-                    </div>
-
-                    <!-- Video / Audio Player Viewport -->
-                    <div class="player-viewport" id="playerViewport">
-                        <video id="mediaStreamVideo" class="media-video-element" playsinline></video>
-                        <div id="mediaAudioVisualizer" class="audio-visualizer-box hidden">
-                            <div class="audio-pulse-bars">
-                                <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                        <div class="player-viewport" id="playerViewport">
+                            <video id="mediaStreamVideo" class="local-preview-player" playsinline></video>
+                            <div id="mediaAudioVisualizer" class="audio-visualizer-box hidden">
+                                <div class="audio-pulse-bars">
+                                    <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                                </div>
+                                <p class="audio-label" id="audioStreamLabel">Audio Stream Playing</p>
                             </div>
-                            <p class="audio-label" id="audioStreamLabel">Audio Stream Playing</p>
-                        </div>
-                        <div id="playerBufferingOverlay" class="player-buffering-overlay hidden">
-                            <div class="spinner"></div>
-                            <p id="playerBufferingText">Buffering stream...</p>
+                            <div id="playerBufferingOverlay" class="player-buffering-overlay hidden">
+                                <div class="spinner"></div>
+                                <p id="playerBufferingText">Buffering stream...</p>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Custom Cyberpunk Timeline & Playback Controls Bar -->
+                    <!-- Custom Timeline & Playback Controls Bar -->
                     <div class="player-custom-controls" id="playerCustomControls">
                         <div class="timeline-wrapper" id="timelineWrapper">
                             <div class="timeline-bar-bg" id="timelineBarBg" onclick="onTimelineBarClick(event)">
@@ -741,10 +742,10 @@
     </div>
 
     <!-- Client-Side Libraries & Execution Bridge -->
-    <script src="wasm_exec.js?v=1.9.2"></script>
-    <script src="qrcode.min.js?v=1.9.2"></script>
-    <script src="peerjs.min.js?v=1.9.2"></script>
-    <script src="nostr.bundle.js?v=1.9.2"></script>
-    <script src="app.js?v=1.9.2"></script>
+    <script src="wasm_exec.js?v=1.9.3"></script>
+    <script src="qrcode.min.js?v=1.9.3"></script>
+    <script src="peerjs.min.js?v=1.9.3"></script>
+    <script src="nostr.bundle.js?v=1.9.3"></script>
+    <script src="app.js?v=1.9.3"></script>
 </body>
 </html>

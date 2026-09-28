@@ -1100,59 +1100,24 @@ body {
     outline: none;
 }
 
-/* Stream Player Viewport (Viewer) */
-.stream-player-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-}
-
-.player-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 10px;
-}
-
-.player-title-info {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.player-stream-title {
-    font-size: 1.1rem;
-    font-weight: 800;
-    color: var(--text-primary);
-}
-
+/* Stream Player Viewport (Viewer) - inside media-preview-box */
 .player-viewport {
     position: relative;
     width: 100%;
-    min-height: 280px;
-    max-height: 520px;
     background: #000000;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-sm);
     overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.6);
 }
 
-.media-video-element {
-    width: 100%;
-    height: 100%;
+.player-viewport .local-preview-player {
     max-height: 520px;
-    object-fit: contain;
-    outline: none;
-    background: #000000;
+}
+
+.player-viewport .audio-visualizer-box {
+    border-radius: var(--radius-sm);
 }
 
 /* Audio Stream Visualizer */
