@@ -44,7 +44,7 @@ async function initWasm() {
     const go = new Go();
 
     try {
-        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.8.1"), go.importObject);
+        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.8.2"), go.importObject);
         go.run(result.instance);
 
         // Await BadHub global bridge initialization
@@ -56,7 +56,7 @@ async function initWasm() {
 
         if (window.BadHub && window.BadHub.ready) {
             statusDot.className = "status-dot ready";
-            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.8.1";
+            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.8.2";
             statusText.innerText = "Engine Ready (" + ver + ")";
             checkSenderReady();
             checkUrlHash();
@@ -75,7 +75,7 @@ async function fetchGitHubBadHubVersion() {
     try {
         // 1. Check static version.json first (instant, unaffected by GitHub API rate limits)
         try {
-            const localResp = await fetch("version.json?v=1.8.1");
+            const localResp = await fetch("version.json?v=1.8.2");
             if (localResp.ok) {
                 const localData = await localResp.json();
                 if (localData && localData.version) {
@@ -1181,6 +1181,7 @@ async function uploadToBlossom(passphrase) {
         activeBlossomXhr = xhr;
         xhr.open("PUT", `${serverUrl}/upload`);
         xhr.setRequestHeader("Authorization", authHeader);
+        xhr.setRequestHeader("X-SHA-256", blobSha256);
         xhr.setRequestHeader("Content-Type", "application/octet-stream");
 
         xhr.upload.onprogress = (e) => {
@@ -2176,7 +2177,25 @@ function switchMediaMode(mode) {
 
 // Transport Switching for Media Broadcast
 function switchMediaTransport(mode) {
-    // Mode can be 'webrtc' or 'blossom'
+    const blossomBox = document.getElementById("mediaBlossomBox");
+    if (blossomBox) {
+        if (mode === "blossom") {
+            blossomBox.classList.remove("hidden");
+        } else {
+            blossomBox.classList.add("hidden");
+        }
+    }
+}
+
+function onMediaBlossomServerChange(val) {
+    const customGroup = document.getElementById("customMediaBlossomServerGroup");
+    if (customGroup) {
+        if (val === "custom") {
+            customGroup.classList.remove("hidden");
+        } else {
+            customGroup.classList.add("hidden");
+        }
+    }
 }
 
 // Slider update helper
@@ -2369,17 +2388,28 @@ async function streamMediaToViewer(conn, passphrase, redundancy) {
 async function broadcastViaBlossom(passphrase) {
     const statusEl = document.getElementById("mediaBroadcastStatus");
     const linkInput = document.getElementById("mediaStreamLinkInput");
+    const chunksEl = document.getElementById("mediaChunksStreamed");
+    const bitrateEl = document.getElementById("mediaBitrate");
     const file = mediaSelectedFile;
-    const server = "https://nostr.download";
+
+    let targetServer = document.getElementById("mediaBlossomServer")?.value || "https://nostr.download";
+    if (targetServer === "custom") {
+        const customUrl = document.getElementById("txtCustomMediaBlossomServer")?.value.trim();
+        if (customUrl) targetServer = customUrl.replace(/\/+$/, "");
+    }
 
     try {
+        statusEl.innerText = "Initializing Post-Quantum AEAD Stream Encryption...";
         const initRes = window.BadHub.initBlossomEncryptor(file.name, file.size, file.type || "video/mp4", passphrase);
         if (!initRes || !initRes.success) {
             throw new Error(initRes ? initRes.error : "Encryption init failed");
         }
 
+        const blobHasherId = window.BadHub.createSha256();
+        window.BadHub.updateSha256(blobHasherId, initRes.header);
+
         const sealedChunks = [initRes.header];
-        const chunkSize = 256 * 1024;
+        const chunkSize = 512 * 1024;
         let offset = 0;
 
         while (offset < file.size && isBroadcastingMedia) {
@@ -2393,29 +2423,128 @@ async function broadcastViaBlossom(passphrase) {
                 throw new Error(encRes ? encRes.error : "Chunk encryption failed");
             }
             sealedChunks.push(encRes.sealed);
+            window.BadHub.updateSha256(blobHasherId, encRes.sealed);
+
+            const encPct = Math.round((offset / file.size) * 100);
+            statusEl.innerText = `Encrypting stream chunks (${encPct}%)...`;
+            if (chunksEl) chunksEl.innerText = sealedChunks.length;
         }
 
+        if (!isBroadcastingMedia) {
+            window.BadHub.finalizeSha256(blobHasherId);
+            return;
+        }
+
+        const blobSha256 = window.BadHub.finalizeSha256(blobHasherId);
         const encryptedBlob = new Blob(sealedChunks, { type: "application/octet-stream" });
-        statusEl.innerText = `Uploading ${formatBytes(encryptedBlob.size)} to Blossom Relay...`;
 
-        const uploadResp = await fetch(`${server}/upload`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/octet-stream" },
-            body: encryptedBlob
-        });
+        // BUD-11 Nostr Authorization Event (kind 24242)
+        if (!senderNostrPrivKey && typeof window.NostrTools !== "undefined") {
+            senderNostrPrivKey = window.NostrTools.generatePrivateKey();
+        }
+        const now = Math.floor(Date.now() / 1000);
+        const authEvent = window.NostrTools.finishEvent({
+            kind: 24242,
+            created_at: now,
+            tags: [
+                ["t", "upload"],
+                ["x", blobSha256],
+                ["size", String(encryptedBlob.size)],
+                ["expiration", String(now + 3600)]
+            ],
+            content: `BadHub encrypted stream: ${file.name}`
+        }, senderNostrPrivKey);
+        const authHeader = "Nostr " + btoa(unescape(encodeURIComponent(JSON.stringify(authEvent))));
 
-        if (!uploadResp.ok) {
-            throw new Error(`Blossom upload failed with status HTTP ${uploadResp.status}`);
+        // Candidate servers with automatic fallback
+        const candidateServers = [targetServer];
+        if (!candidateServers.includes("https://nostr.download")) candidateServers.push("https://nostr.download");
+        if (!candidateServers.includes("https://blossom.primal.net")) candidateServers.push("https://blossom.primal.net");
+
+        let uploadSuccess = false;
+        let successfulServer = "";
+        let lastError = null;
+
+        for (const serverUrl of candidateServers) {
+            if (!isBroadcastingMedia) break;
+
+            let hostName = serverUrl;
+            try { hostName = new URL(serverUrl).hostname; } catch (_) {}
+            statusEl.innerText = `Uploading ${formatBytes(encryptedBlob.size)} to Blossom (${hostName})...`;
+
+            let lastLoaded = 0;
+            let lastTime = performance.now();
+
+            try {
+                await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    activeBlossomXhr = xhr;
+                    xhr.open("PUT", `${serverUrl}/upload`);
+                    xhr.setRequestHeader("Authorization", authHeader);
+                    xhr.setRequestHeader("X-SHA-256", blobSha256);
+                    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+                    xhr.upload.onprogress = (e) => {
+                        if (e.lengthComputable && isBroadcastingMedia) {
+                            const pct = Math.round((e.loaded / e.total) * 100);
+                            statusEl.innerText = `Uploading to ${hostName} (${pct}% - ${formatBytes(e.loaded)} / ${formatBytes(e.total)})...`;
+                            const curTime = performance.now();
+                            const dt = (curTime - lastTime) / 1000;
+                            if (dt >= 0.5) {
+                                const speed = ((e.loaded - lastLoaded) / 1048576) / dt;
+                                if (bitrateEl) bitrateEl.innerText = `${speed.toFixed(2)} MB/s`;
+                                lastLoaded = e.loaded;
+                                lastTime = curTime;
+                            }
+                        }
+                    };
+
+                    xhr.onload = () => {
+                        activeBlossomXhr = null;
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            resolve(xhr.responseText);
+                        } else {
+                            const reason = xhr.getResponseHeader("x-reason") || xhr.statusText || "";
+                            reject(new Error(`Server returned HTTP ${xhr.status} ${reason}`.trim()));
+                        }
+                    };
+
+                    xhr.onerror = () => {
+                        activeBlossomXhr = null;
+                        reject(new Error(`Network error connecting to ${hostName}`));
+                    };
+
+                    xhr.onabort = () => {
+                        activeBlossomXhr = null;
+                        reject(new Error("Upload aborted by user"));
+                    };
+
+                    xhr.send(encryptedBlob);
+                });
+
+                uploadSuccess = true;
+                successfulServer = serverUrl;
+                break;
+            } catch (err) {
+                lastError = err;
+                console.warn(`Blossom upload failed on ${serverUrl}:`, err);
+                if (candidateServers.indexOf(serverUrl) < candidateServers.length - 1 && isBroadcastingMedia) {
+                    statusEl.innerText = `Retrying on alternative relay... (${err.message})`;
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+            }
         }
 
-        const data = await uploadResp.json();
-        const blobSha256 = (data && (data.sha256 || data.url)) ? (data.sha256 || data.url.split("/").pop()) : "";
+        if (!uploadSuccess) {
+            throw lastError || new Error("Failed to upload to Blossom relays");
+        }
 
         statusEl.innerText = "Broadcasting (Blossom Asynchronous Stream Ready)";
-        const streamUrl = `${window.location.origin}${window.location.pathname}#stream=blossom&blob=${encodeURIComponent(blobSha256)}&server=${encodeURIComponent(server)}&key=${encodeURIComponent(passphrase)}&name=${encodeURIComponent(file.name)}&type=${encodeURIComponent(file.type || "video/mp4")}&size=${file.size}`;
+        const streamUrl = `${window.location.origin}${window.location.pathname}#stream=blossom&blob=${encodeURIComponent(blobSha256)}&server=${encodeURIComponent(successfulServer)}&key=${encodeURIComponent(passphrase)}&name=${encodeURIComponent(file.name)}&type=${encodeURIComponent(file.type || "video/mp4")}&size=${file.size}`;
         linkInput.value = streamUrl;
         renderMediaQr(streamUrl);
     } catch (err) {
+        if (!isBroadcastingMedia) return;
         statusEl.innerText = "Error: " + err.message;
         alert("Blossom Broadcast Error: " + err.message);
         stopMediaBroadcast();
@@ -2458,6 +2587,12 @@ function toggleMediaQr() {
 
 function stopMediaBroadcast() {
     isBroadcastingMedia = false;
+    if (activeBlossomXhr) {
+        try {
+            activeBlossomXhr.abort();
+        } catch (_) {}
+        activeBlossomXhr = null;
+    }
     if (mediaBroadcastPeer) {
         mediaBroadcastPeer.destroy();
         mediaBroadcastPeer = null;
@@ -2952,7 +3087,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     // Setup Service Worker for in-browser video & audio streaming
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw-stream.js?v=1.8.1', { scope: './' })
+        navigator.serviceWorker.register('sw-stream.js?v=1.8.2', { scope: './' })
             .then(reg => {
                 console.log('Stream ServiceWorker registered with scope:', reg.scope);
             })

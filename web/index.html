@@ -6,9 +6,9 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <link rel="icon" type="image/svg+xml" href="favicon.svg?v=1.8.1">
-    <link rel="alternate icon" type="image/png" href="favicon.png?v=1.8.1">
-    <link rel="stylesheet" href="style.css?v=1.8.1">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg?v=1.8.2">
+    <link rel="alternate icon" type="image/png" href="favicon.png?v=1.8.2">
+    <link rel="stylesheet" href="style.css?v=1.8.2">
 </head>
 <body>
     <div class="app-container">
@@ -510,6 +510,31 @@
                         </div>
                     </div>
 
+                    <!-- Decentralized Blossom Storage Box for Media Broadcaster -->
+                    <div id="mediaBlossomBox" class="magic-box hidden" style="margin-top: 15px;">
+                        <div class="privacy-header">
+                            <label class="control-label font-bold" style="color: var(--accent-cyan);">Decentralized Blossom Relay Network</label>
+                            <span class="privacy-badge badge-turn">Asynchronous</span>
+                        </div>
+                        <p class="privacy-hint" style="margin-top: 6px;">
+                            Encrypts your media client-side with ChaCha20-Poly1305 and uploads the stream ciphertext to federated Blossom relays using BUD-11 authorization. Viewers can watch anytime even if you go offline.
+                        </p>
+
+                        <div class="form-group" style="margin-top: 10px;">
+                            <label for="mediaBlossomServer">Target Blossom Storage Relay</label>
+                            <select id="mediaBlossomServer" class="input-text font-mono" onchange="onMediaBlossomServerChange(this.value)">
+                                <option value="https://nostr.download">https://nostr.download (Community CDN)</option>
+                                <option value="https://blossom.primal.net">https://blossom.primal.net (Primal Network)</option>
+                                <option value="custom">Custom Server...</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group hidden" id="customMediaBlossomServerGroup">
+                            <label for="txtCustomMediaBlossomServer">Custom Blossom Relay URL</label>
+                            <input type="text" id="txtCustomMediaBlossomServer" class="input-text font-mono" placeholder="https://my-blossom-server.example.com">
+                        </div>
+                    </div>
+
                     <div class="action-bar">
                         <button class="btn btn-primary" id="btnStartBroadcast" onclick="startMediaBroadcast()" disabled>Start Broadcasting Stream</button>
                         <button class="btn btn-danger hidden" id="btnStopBroadcast" onclick="stopMediaBroadcast()">Stop Broadcast</button>
@@ -664,10 +689,10 @@
     </div>
 
     <!-- Client-Side Libraries & Execution Bridge -->
-    <script src="wasm_exec.js?v=1.8.1"></script>
-    <script src="qrcode.min.js?v=1.8.1"></script>
-    <script src="peerjs.min.js?v=1.8.1"></script>
-    <script src="nostr.bundle.js?v=1.8.1"></script>
-    <script src="app.js?v=1.8.1"></script>
+    <script src="wasm_exec.js?v=1.8.2"></script>
+    <script src="qrcode.min.js?v=1.8.2"></script>
+    <script src="peerjs.min.js?v=1.8.2"></script>
+    <script src="nostr.bundle.js?v=1.8.2"></script>
+    <script src="app.js?v=1.8.2"></script>
 </body>
 </html>
