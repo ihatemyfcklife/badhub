@@ -615,6 +615,18 @@ body {
     min-width: 0;
 }
 
+/* Broadcast Active card: link bar on its own row, action buttons below */
+.magic-link-box {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.magic-link-box .input-text {
+    flex: 1 0 100%;
+}
+
 .magic-extra-grid {
     display: flex;
     justify-content: space-between;
@@ -993,6 +1005,9 @@ body {
         width: 100%;
     }
     .qr-trigger-box .btn {
+        width: 100%;
+    }
+    .magic-link-box .btn {
         width: 100%;
     }
     .action-bar {
