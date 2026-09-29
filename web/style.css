@@ -903,6 +903,23 @@ body {
     color: var(--text-secondary);
 }
 
+.footer a {
+    color: var(--text-secondary);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+    transition: color 0.2s ease;
+}
+
+.footer a strong {
+    color: inherit;
+}
+
+.footer a:hover,
+.footer a:focus-visible {
+    color: var(--accent-cyan);
+}
+
 @keyframes pulse {
     0%, 100% { opacity: 1; transform: scale(1); }
     50% { opacity: 0.4; transform: scale(0.9); }
