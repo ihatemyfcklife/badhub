@@ -6,9 +6,9 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <link rel="icon" type="image/svg+xml" href="favicon.svg?v=1.9.2">
-    <link rel="alternate icon" type="image/png" href="favicon.png?v=1.9.2">
-    <link rel="stylesheet" href="style.css?v=1.9.2">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg?v=1.9.4">
+    <link rel="alternate icon" type="image/png" href="favicon.png?v=1.9.4">
+    <link rel="stylesheet" href="style.css?v=1.9.4">
 </head>
 <body>
     <div class="app-container">
@@ -796,6 +796,19 @@
                         <p class="privacy-hint">Saves the incoming media stream directly to disk via OPFS, eliminating browser RAM limits.</p>
                     </div>
 
+                    <!-- P2P Swarm Seeding Controls -->
+                    <div class="privacy-box">
+                        <div class="privacy-header">
+                            <label class="toggle-label" for="watchSwarmSeedToggle">
+                                <input type="checkbox" id="watchSwarmSeedToggle" onchange="toggleMediaSwarmSeed(this.checked)" checked>
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-text">P2P Swarm Seeding (Recode at 30% Progress)</span>
+                            </label>
+                            <span class="privacy-badge badge-turn" id="watchSwarmBadge">Swarm Active</span>
+                        </div>
+                        <p class="privacy-hint">Turns your browser into an active RLNC seeder for the live stream, recoding partial packets to accelerate playback for other swarm viewers.</p>
+                    </div>
+
                     <div class="action-bar">
                         <button class="btn btn-primary" id="btnConnectStream" onclick="startStreamingPlayback()">Connect &amp; Start Streaming Playback</button>
                         <button class="btn btn-danger hidden" id="btnDisconnectStream" onclick="stopStreamingPlayback()">Stop Playback</button>
@@ -898,6 +911,10 @@
                                 <span class="metric-value" id="streamMetricRlnc">0 dropped / 0 rec</span>
                             </div>
                             <div class="metric-item">
+                                <span class="metric-label">P2P Swarm Recoded</span>
+                                <span class="metric-value" id="streamMetricRecoded">0 frames</span>
+                            </div>
+                            <div class="metric-item">
                                 <span class="metric-label">AEAD Integrity Anchor</span>
                                 <span class="metric-value" id="streamMetricIntegrity">Verifying</span>
                             </div>
@@ -941,10 +958,10 @@
     </div>
 
     <!-- Client-Side Libraries & Execution Bridge -->
-    <script src="wasm_exec.js?v=1.9.3"></script>
-    <script src="qrcode.min.js?v=1.9.3"></script>
-    <script src="peerjs.min.js?v=1.9.3"></script>
-    <script src="nostr.bundle.js?v=1.9.3"></script>
-    <script src="app.js?v=1.9.3"></script>
+    <script src="wasm_exec.js?v=1.9.4"></script>
+    <script src="qrcode.min.js?v=1.9.4"></script>
+    <script src="peerjs.min.js?v=1.9.4"></script>
+    <script src="nostr.bundle.js?v=1.9.4"></script>
+    <script src="app.js?v=1.9.4"></script>
 </body>
 </html>

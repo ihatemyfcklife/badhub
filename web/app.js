@@ -85,7 +85,7 @@ async function initWasm() {
     const go = new Go();
 
     try {
-        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.9.3"), go.importObject);
+        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.9.4"), go.importObject);
         go.run(result.instance);
 
         // Await BadHub global bridge initialization
@@ -97,7 +97,7 @@ async function initWasm() {
 
         if (window.BadHub && window.BadHub.ready) {
             statusDot.className = "status-dot ready";
-            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.9.3";
+            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.9.4";
             statusText.innerText = "Engine Ready (" + ver + ")";
             checkSenderReady();
             checkUrlHash();
@@ -116,7 +116,7 @@ async function fetchGitHubBadHubVersion() {
     try {
         // 1. Check static version.json first (instant, unaffected by GitHub API rate limits)
         try {
-            const localResp = await fetch("version.json?v=1.9.3");
+            const localResp = await fetch("version.json?v=1.9.4");
             if (localResp.ok) {
                 const localData = await localResp.json();
                 if (localData && localData.version) {
@@ -2227,6 +2227,12 @@ let mediaDeclaredDuration = 0;
 let isUserScrubbing = false;
 let mediaVideoEventsAttached = false;
 
+// P2P Swarm Seeding state for the live media viewer (RLNC recode & re-broadcast)
+let mediaSwarmSeedEnabled = true;
+let mediaViewerBroadcastChannel = null;
+let mediaViewerAirgapChannel = null;
+let mediaViewerNostrPrivKey = null;
+
 // Mode Switching (Broadcast vs Watch)
 function switchMediaMode(mode) {
     const navBroadcast = document.getElementById("mediaNavBroadcast");
@@ -2382,6 +2388,7 @@ async function generateWatchWebRTCAnswer() {
         pc.ondatachannel = e => {
             const dc = e.channel;
             dc.binaryType = "arraybuffer";
+            mediaViewerAirgapChannel = dc;
             dc.onmessage = ev => {
                 if (!isStreamingPlayback) return;
                 const data = ev.data;
@@ -2402,10 +2409,106 @@ async function generateWatchWebRTCAnswer() {
                 const frameBytes = data instanceof Uint8Array ? data : new Uint8Array(data);
                 const r = window.BadHub.ingestReceiverFrame(frameBytes);
                 if (r && r.completed) finalizeMediaStreamPlayback();
+                maybeSeedMediaSwarm("airgap", null, r);
             };
         };
     } catch (err) {
         showPopup("Invalid offer token format: " + err.message, "error");
+    }
+}
+
+// ------------------------------------------
+// P2P SWARM SEEDING FOR LIVE MEDIA STREAMS
+// ------------------------------------------
+
+function toggleMediaSwarmSeed(checked) {
+    mediaSwarmSeedEnabled = checked;
+    const badge = document.getElementById("watchSwarmBadge");
+    if (!badge) return;
+    if (checked) {
+        badge.innerText = "Swarm Active";
+        badge.className = "privacy-badge badge-turn";
+    } else {
+        badge.innerText = "Seeding Disabled";
+        badge.className = "privacy-badge badge-direct";
+    }
+}
+
+// Recodes an innovative RLNC frame from the partially decoded media stream and
+// re-broadcasts it to the swarm over the transport currently in use.
+function broadcastRecodedMediaSwarmFrame(transport, roomId) {
+    if (!window.BadHub || !window.BadHub.recodeReceiverFrame) return;
+    const recodeRes = window.BadHub.recodeReceiverFrame();
+    if (!recodeRes || !recodeRes.success || !recodeRes.frame) return;
+
+    const frame = recodeRes.frame;
+
+    if (transport === "nostr") {
+        const pool = getNostrPool();
+        if (!pool || !roomId || typeof window.NostrTools === "undefined") return;
+        if (!mediaViewerNostrPrivKey) {
+            mediaViewerNostrPrivKey = window.NostrTools.generatePrivateKey();
+        }
+        let binary = "";
+        const len = frame.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(frame[i]);
+        }
+        const ev = window.NostrTools.finishEvent({
+            kind: 20001,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [
+                ["d", roomId],
+                ["t", "badhub-media-frame"]
+            ],
+            content: btoa(binary)
+        }, mediaViewerNostrPrivKey);
+        pool.publish(NOSTR_RELAYS, ev);
+    } else if (transport === "broadcast") {
+        if (!mediaViewerBroadcastChannel) return;
+        try {
+            mediaViewerBroadcastChannel.postMessage({ type: "frame", data: frame });
+        } catch (_) {
+            return;
+        }
+    } else if (transport === "airgap") {
+        const dc = mediaViewerAirgapChannel;
+        if (!dc || dc.readyState !== "open" || dc.bufferedAmount >= 128 * 1024) return;
+        try {
+            dc.send(frame);
+        } catch (_) {
+            return;
+        }
+    } else {
+        // Direct P2P viewer connection back to the broadcaster, which relays the
+        // recoded frame to every other viewer of the swarm.
+        if (!mediaViewerConn || !mediaViewerConn.open) return;
+        try {
+            if (mediaViewerConn.dataChannel && mediaViewerConn.dataChannel.bufferedAmount >= 128 * 1024) return;
+            mediaViewerConn.send(frame);
+        } catch (_) {
+            return;
+        }
+    }
+
+    updateStreamSwarmMetric();
+}
+
+// Same seeding policy as the file receiver: recode once progress reaches 30%
+// and only for every third ingested frame to keep swarm traffic balanced.
+function maybeSeedMediaSwarm(transport, roomId, ingestRes) {
+    if (!mediaSwarmSeedEnabled || !ingestRes || ingestRes.completed) return;
+    if (ingestRes.percent < 30.0) return;
+    if (ingestRes.framesReceived % 3 !== 0) return;
+    broadcastRecodedMediaSwarmFrame(transport, roomId);
+}
+
+function updateStreamSwarmMetric() {
+    const recodedEl = document.getElementById("streamMetricRecoded");
+    if (!recodedEl || !window.BadHub || !window.BadHub.getReceiverStats) return;
+    const rxStats = window.BadHub.getReceiverStats();
+    if (rxStats && typeof rxStats.framesRecoded === "number") {
+        recodedEl.innerText = `${rxStats.framesRecoded} frames`;
     }
 }
 
@@ -2551,6 +2654,20 @@ async function startMediaBroadcast() {
             conn.on("error", () => {
                 mediaActiveViewers.delete(conn.peer);
                 updateViewerCount();
+            });
+
+            // P2P Swarm Seeding: relay recoded frames sent back by swarm viewers
+            // to every other viewer, so seeding helps the whole swarm.
+            conn.on("data", data => {
+                if (!isBroadcastingMedia || typeof data === "string") return;
+                const frameBytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+                mediaActiveViewers.forEach(viewerConn => {
+                    if (viewerConn === conn || !viewerConn.open) return;
+                    try {
+                        if (viewerConn.dataChannel && viewerConn.dataChannel.bufferedAmount >= 128 * 1024) return;
+                        viewerConn.send(frameBytes);
+                    } catch (_) {}
+                });
             });
         });
 
@@ -2852,6 +2969,7 @@ async function playNostrStream(roomId, passphrase) {
             if (!isReceiverInitialized) { pendingFrames.push(bytes); return; }
             const r = window.BadHub.ingestReceiverFrame(bytes);
             if (r && r.completed) finalizeMediaStreamPlayback();
+            maybeSeedMediaSwarm("nostr", roomId, r);
             updateStreamTelemetry();
         }
     });
@@ -2877,6 +2995,7 @@ async function playBroadcastChannelStream(channelId, passphrase) {
     playbackState.innerText = "Connecting to BroadcastChannel stream...";
 
     const bc = new BroadcastChannel(channelId);
+    mediaViewerBroadcastChannel = bc;
     let isReceiverInitialized = false;
     const pendingFrames = [];
 
@@ -2914,6 +3033,7 @@ async function playBroadcastChannelStream(channelId, passphrase) {
             if (!isReceiverInitialized) { pendingFrames.push(frameBytes); return; }
             const r = window.BadHub.ingestReceiverFrame(frameBytes);
             if (r && r.completed) { finalizeMediaStreamPlayback(); bc.close(); }
+            maybeSeedMediaSwarm("broadcast", channelId, r);
             updateStreamTelemetry();
         }
     };
@@ -3462,6 +3582,7 @@ async function playWebRtcStream(roomCode, passphrase) {
                 if (ingestRes && ingestRes.completed) {
                     finalizeMediaStreamPlayback();
                 }
+                maybeSeedMediaSwarm("webrtc", roomCode, ingestRes);
 
                 const stats = window.BadHub.getReceiverStats ? window.BadHub.getReceiverStats() : null;
                 if (stats) {
@@ -3661,6 +3782,8 @@ function updateStreamTelemetry() {
         const pct = Math.min(100, Math.round((mediaTotalReceivedBytes / mediaTotalFileSize) * 100));
         bufferBar.style.width = pct + "%";
     }
+
+    updateStreamSwarmMetric();
 }
 
 // ============================
@@ -3885,6 +4008,16 @@ function stopStreamingPlayback() {
         mediaBlossomAbortController = null;
     }
 
+    // Tear down P2P swarm seeding channels for the live stream
+    if (mediaViewerBroadcastChannel) {
+        try { mediaViewerBroadcastChannel.close(); } catch (_) {}
+        mediaViewerBroadcastChannel = null;
+    }
+    mediaViewerAirgapChannel = null;
+    mediaViewerNostrPrivKey = null;
+    const recodedMetricEl = document.getElementById("streamMetricRecoded");
+    if (recodedMetricEl) recodedMetricEl.innerText = "0 frames";
+
     mediaDeclaredDuration = 0;
     isUserScrubbing = false;
     mediaVideoEventsAttached = false;
@@ -3987,7 +4120,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     // Setup Service Worker for in-browser video & audio streaming
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw-stream.js?v=1.9.3', { scope: './' })
+        navigator.serviceWorker.register('sw-stream.js?v=1.9.4', { scope: './' })
             .then(reg => {
                 console.log('Stream ServiceWorker registered with scope:', reg.scope);
             })
