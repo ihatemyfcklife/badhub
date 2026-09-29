@@ -663,29 +663,137 @@
                 <div class="card">
                     <h2>2. Connect to Live Media Stream</h2>
                     <p class="desc">
-                        Enter a Stream Link, Room ID, or Blossom Stream URL to watch or listen in real-time.
+                        Select a transport mode and enter the stream link or room code to watch or listen in real-time.
                         The video begins playing as soon as initial packets arrive.
                     </p>
 
-                    <div class="form-grid">
-                        <div class="form-group" style="grid-column: 1 / -1;">
-                            <label for="mediaStreamInput">Stream Link or Room Code / Blossom URL</label>
-                            <input type="text" id="mediaStreamInput" class="input-text font-mono" placeholder="Paste stream link (e.g. #stream=p2p&amp;room=...) or room ID">
-                        </div>
+                    <div class="form-group">
+                        <label for="mediaWatchPassphrase">Decryption Passphrase</label>
+                        <input type="text" id="mediaWatchPassphrase" class="input-text" value="badhub-live-stream-v1">
+                        <small>Decryption key for the incoming media stream.</small>
+                    </div>
 
-                        <div class="form-group">
-                            <label for="mediaWatchPassphrase">Decryption Passphrase</label>
-                            <input type="text" id="mediaWatchPassphrase" class="input-text" value="badhub-live-stream-v1">
-                            <small>Decryption key for the incoming media stream.</small>
-                        </div>
-
-                        <div class="form-group">
-                            <label>Direct-to-Disk Storage (OPFS)</label>
-                            <label class="switch-container" style="display: flex; align-items: center; gap: 8px; margin-top: 6px;">
-                                <input type="checkbox" id="mediaOpfsToggle" checked>
-                                <span class="switch-label">Save streamed media to disk buffer (0 RAM)</span>
+                    <!-- Transport Mode Selector -->
+                    <div class="form-group" style="margin-top: 8px;">
+                        <label>Transport Mode</label>
+                        <div class="transport-selector">
+                            <label class="radio-label">
+                                <input type="radio" name="watchTransport" value="magic" checked onchange="switchWatchTransport('magic')">
+                                <span>Magic Link / Room Code (Automated P2P)</span>
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="watchTransport" value="blossom" onchange="switchWatchTransport('blossom')">
+                                <span>Decentralized Blossom (Asynchronous Offline Stream)</span>
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="watchTransport" value="nostr" onchange="switchWatchTransport('nostr')">
+                                <span>Decentralized Nostr Relays (Zero IP Exposure)</span>
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="watchTransport" value="broadcast" onchange="switchWatchTransport('broadcast')">
+                                <span>BroadcastChannel (Tab-to-Tab Local)</span>
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="watchTransport" value="airgap" onchange="switchWatchTransport('airgap')">
+                                <span>Manual Air-Gap (Offline SDP Tokens)</span>
                             </label>
                         </div>
+                    </div>
+
+                    <!-- TURN Relay Privacy Box -->
+                    <div class="privacy-box" id="watchPrivacyBox">
+                        <div class="privacy-header">
+                            <label class="toggle-label" for="watchRelayToggle">
+                                <input type="checkbox" id="watchRelayToggle" onchange="toggleWatchRelay(this.checked)">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-text">Hide IP Address (TURN Relay Mode)</span>
+                            </label>
+                            <span class="privacy-badge badge-direct" id="watchPrivacyBadge">Direct P2P (IP Visible)</span>
+                        </div>
+                        <p class="privacy-hint">Forces traffic through a zero-knowledge TURN relay so peers never learn each other's IP addresses.</p>
+                        <details class="custom-turn-drawer">
+                            <summary>Custom TURN Server (Optional)</summary>
+                            <div class="custom-turn-grid">
+                                <div class="form-group">
+                                    <label for="watchTurnUrl">TURN Server (URL)</label>
+                                    <input type="text" id="watchTurnUrl" class="input-text font-mono" placeholder="turn:openrelay.metered.ca:80" oninput="onCustomTurnChange('watch')">
+                                </div>
+                                <div class="form-group">
+                                    <label for="watchTurnUser">Username</label>
+                                    <input type="text" id="watchTurnUser" class="input-text font-mono" placeholder="openrelayproject" oninput="onCustomTurnChange('watch')">
+                                </div>
+                                <div class="form-group">
+                                    <label for="watchTurnPass">Credential</label>
+                                    <input type="password" id="watchTurnPass" class="input-text font-mono" placeholder="openrelayproject" oninput="onCustomTurnChange('watch')">
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- Magic Link / P2P Box -->
+                    <div id="watchMagicBox" class="magic-box">
+                        <div class="share-box">
+                            <label for="mediaStreamInput">Stream Link or Room Code</label>
+                            <div class="share-input-group">
+                                <input type="text" id="mediaStreamInput" class="input-text font-mono" placeholder="Paste stream link or room code (e.g. bh-stream-xxxxxx)">
+                            </div>
+                            <small>If you opened a Magic Link or scanned a QR code, connection starts automatically.</small>
+                        </div>
+                    </div>
+
+                    <!-- Blossom Box -->
+                    <div id="watchBlossomBox" class="magic-box hidden">
+                        <div class="share-box">
+                            <label for="watchBlossomInput">Blossom Stream URL or SHA-256 Hash</label>
+                            <div class="share-input-group">
+                                <input type="text" id="watchBlossomInput" class="input-text font-mono" placeholder="https://nostr.download/<sha256> or hex hash...">
+                            </div>
+                            <small>Streams and decrypts the media directly from federated Blossom relays. The broadcaster does not need to be online.</small>
+                        </div>
+                    </div>
+
+                    <!-- Nostr Box -->
+                    <div id="watchNostrBox" class="magic-box hidden">
+                        <div class="share-box">
+                            <label for="watchNostrInput">Nostr Stream Link or Room ID</label>
+                            <div class="share-input-group">
+                                <input type="text" id="watchNostrInput" class="input-text font-mono" placeholder="Paste Nostr stream link or room ID (e.g. bh-media-xxxxxx)">
+                            </div>
+                            <small>Connects to the encrypted media stream via decentralized Nostr relays with zero IP exposure.</small>
+                        </div>
+                    </div>
+
+                    <!-- BroadcastChannel Box -->
+                    <div id="watchBroadcastChannelBox" class="magic-box hidden">
+                        <div class="share-box">
+                            <label for="watchBroadcastInput">Channel Link or ID</label>
+                            <div class="share-input-group">
+                                <input type="text" id="watchBroadcastInput" class="input-text font-mono" placeholder="Paste channel link or ID (e.g. bh-media-bc-xxxxxx)">
+                            </div>
+                            <small>Opens a local BroadcastChannel tab-to-tab stream. Broadcaster must be open in another tab in the same browser.</small>
+                        </div>
+                    </div>
+
+                    <!-- Air-Gap WebRTC Signaling Box -->
+                    <div id="watchAirgapBox" class="webrtc-box hidden">
+                        <p class="desc">1. Paste the Broadcaster's Offer Token here:</p>
+                        <textarea id="watchAirgapOffer" class="code-area" placeholder="Paste broadcaster's Offer token here..."></textarea>
+                        <button class="btn btn-secondary" onclick="generateWatchWebRTCAnswer()">Generate Answer Token</button>
+                        <p class="desc">2. Copy this Answer Token back to the Broadcaster:</p>
+                        <textarea id="watchAirgapAnswer" class="code-area" placeholder="Answer token will appear here..." readonly></textarea>
+                    </div>
+
+                    <!-- OPFS toggle -->
+                    <div class="privacy-box" style="margin-top: 0;">
+                        <div class="privacy-header">
+                            <label class="toggle-label" for="mediaOpfsToggle">
+                                <input type="checkbox" id="mediaOpfsToggle" checked>
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-text">Direct-to-Disk Storage (OPFS, 0 RAM)</span>
+                            </label>
+                            <span class="privacy-badge badge-turn">Streams API</span>
+                        </div>
+                        <p class="privacy-hint">Saves the incoming media stream directly to disk via OPFS, eliminating browser RAM limits.</p>
                     </div>
 
                     <div class="action-bar">

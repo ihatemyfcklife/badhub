@@ -474,6 +474,8 @@ function getEffectiveIceConfig(forSender) {
     let prefix;
     if (forSender === "media") {
         prefix = "media";
+    } else if (forSender === "watch") {
+        prefix = "watch";
     } else {
         prefix = forSender ? "send" : "recv";
     }
@@ -627,7 +629,7 @@ function onCustomTurnChange(prefix) {
     const pass = document.getElementById(prefix + "TurnPass")?.value.trim() || "";
 
     // Sync to all other prefixes that have no value yet
-    ["send", "recv", "media"].filter(p => p !== prefix).forEach(otherPrefix => {
+    ["send", "recv", "media", "watch"].filter(p => p !== prefix).forEach(otherPrefix => {
         const otherUrl = document.getElementById(otherPrefix + "TurnUrl");
         const otherUser = document.getElementById(otherPrefix + "TurnUser");
         const otherPass = document.getElementById(otherPrefix + "TurnPass");
@@ -650,7 +652,7 @@ function restoreSavedTurnConfig() {
         const saved = localStorage.getItem("badhub_turn_config");
         if (saved) {
             const cfg = JSON.parse(saved);
-            ["send", "recv", "media"].forEach(p => {
+            ["send", "recv", "media", "watch"].forEach(p => {
                 const urlEl = document.getElementById(p + "TurnUrl");
                 const userEl = document.getElementById(p + "TurnUser");
                 const passEl = document.getElementById(p + "TurnPass");
@@ -2313,6 +2315,100 @@ function copyMediaBroadcastChannelLink() {
     });
 }
 
+// ------------------------------------------
+// WATCH & LISTEN TRANSPORT SWITCHING
+// ------------------------------------------
+function switchWatchTransport(mode) {
+    const magicBox = document.getElementById("watchMagicBox");
+    const blossomBox = document.getElementById("watchBlossomBox");
+    const nostrBox = document.getElementById("watchNostrBox");
+    const broadcastBox = document.getElementById("watchBroadcastChannelBox");
+    const airgapBox = document.getElementById("watchAirgapBox");
+    const privacyBox = document.getElementById("watchPrivacyBox");
+
+    [magicBox, blossomBox, nostrBox, broadcastBox, airgapBox].forEach(b => b && b.classList.add("hidden"));
+
+    if (mode === "magic") {
+        if (magicBox) magicBox.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.remove("hidden");
+    } else if (mode === "blossom") {
+        if (blossomBox) blossomBox.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.add("hidden");
+    } else if (mode === "nostr") {
+        if (nostrBox) nostrBox.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.add("hidden");
+    } else if (mode === "broadcast") {
+        if (broadcastBox) broadcastBox.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.add("hidden");
+    } else if (mode === "airgap") {
+        if (airgapBox) airgapBox.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.remove("hidden");
+    }
+}
+
+function toggleWatchRelay(checked) {
+    const badge = document.getElementById("watchPrivacyBadge");
+    if (badge) {
+        if (checked) {
+            badge.innerText = "TURN Relay Active (IPs Masked)";
+            badge.className = "privacy-badge badge-relay";
+        } else {
+            badge.innerText = "Direct P2P (IP Visible)";
+            badge.className = "privacy-badge badge-direct";
+        }
+    }
+}
+
+async function generateWatchWebRTCAnswer() {
+    const offerTxt = document.getElementById("watchAirgapOffer")?.value.trim();
+    if (!offerTxt) {
+        showPopup("Please paste the broadcaster's offer token first.", "error");
+        return;
+    }
+    if (typeof Peer === "undefined") {
+        showPopup("PeerJS is not loaded. Please check your connection.", "error");
+        return;
+    }
+    try {
+        const offerData = JSON.parse(atob(offerTxt));
+        const pc = new RTCPeerConnection(getEffectiveIceConfig("watch"));
+        await pc.setRemoteDescription(new RTCSessionDescription(offerData.sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        const answerToken = btoa(JSON.stringify({ sdp: answer }));
+        const answerEl = document.getElementById("watchAirgapAnswer");
+        if (answerEl) answerEl.value = answerToken;
+
+        pc.ondatachannel = e => {
+            const dc = e.channel;
+            dc.binaryType = "arraybuffer";
+            dc.onmessage = ev => {
+                if (!isStreamingPlayback) return;
+                const data = ev.data;
+                if (typeof data === "string") {
+                    try {
+                        const msg = JSON.parse(data);
+                        if (msg.type === "BH_MEDIA_STREAM_HEADER") {
+                            const passphrase = document.getElementById("mediaWatchPassphrase")?.value.trim() || "badhub-live-stream-v1";
+                            const metaBytes = new Uint8Array(msg.meta);
+                            const initRes = window.BadHub.initReceiver(metaBytes, passphrase, feedDecryptedMediaChunk);
+                            if (initRes && initRes.success) {
+                                if (msg.duration > 0) mediaDeclaredDuration = msg.duration;
+                            }
+                        }
+                    } catch (_) {}
+                    return;
+                }
+                const frameBytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+                const r = window.BadHub.ingestReceiverFrame(frameBytes);
+                if (r && r.completed) finalizeMediaStreamPlayback();
+            };
+        };
+    } catch (err) {
+        showPopup("Invalid offer token format: " + err.message, "error");
+    }
+}
+
 function onMediaBlossomServerChange(val) {
     const customGroup = document.getElementById("customMediaBlossomServerGroup");
     if (customGroup) {
@@ -3091,11 +3187,24 @@ function stopMediaBroadcast() {
 // ------------------------------------------
 
 async function startStreamingPlayback(customParam) {
-    const inputVal = (typeof customParam === "string" && customParam.length > 0)
-        ? customParam
-        : document.getElementById("mediaStreamInput").value.trim();
+    // Determine which transport is selected and read the appropriate input
+    const watchMode = document.querySelector('input[name="watchTransport"]:checked')?.value || "magic";
 
-    if (!inputVal) {
+    let inputVal;
+    if (typeof customParam === "string" && customParam.length > 0) {
+        inputVal = customParam;
+    } else if (watchMode === "blossom") {
+        inputVal = document.getElementById("watchBlossomInput")?.value.trim() || document.getElementById("mediaStreamInput")?.value.trim();
+    } else if (watchMode === "nostr") {
+        inputVal = document.getElementById("watchNostrInput")?.value.trim() || document.getElementById("mediaStreamInput")?.value.trim();
+    } else if (watchMode === "broadcast") {
+        inputVal = document.getElementById("watchBroadcastInput")?.value.trim() || document.getElementById("mediaStreamInput")?.value.trim();
+    } else {
+        // magic or airgap — use the main stream input
+        inputVal = document.getElementById("mediaStreamInput")?.value.trim();
+    }
+
+    if (!inputVal && watchMode !== "airgap") {
         showPopup("Please enter a stream link, room code, or Blossom URL.", "error");
         return;
     }
@@ -3180,14 +3289,14 @@ async function startStreamingPlayback(customParam) {
         }
         const fullUrl = (blobId && blobId.startsWith("http")) ? blobId : `${server.replace(/\/+$/, "")}/${blobId || ''}`;
         await playBlossomStream(fullUrl, passphrase);
-    } else if (streamMode === "nostr") {
+    } else if (streamMode === "nostr" || (!streamMode && watchMode === "nostr")) {
         liveBadge.innerText = "NOSTR STREAM";
         liveBadge.style.display = "inline-block";
-        await playNostrStream(roomCode, passphrase);
-    } else if (streamMode === "broadcast") {
+        await playNostrStream(inputVal || roomCode, passphrase);
+    } else if (streamMode === "broadcast" || (!streamMode && watchMode === "broadcast")) {
         liveBadge.innerText = "LOCAL BROADCAST";
         liveBadge.style.display = "inline-block";
-        await playBroadcastChannelStream(roomCode, passphrase);
+        await playBroadcastChannelStream(inputVal || roomCode, passphrase);
     } else {
         liveBadge.innerText = "LIVE P2P";
         liveBadge.style.display = "inline-block";
@@ -3277,7 +3386,7 @@ async function playWebRtcStream(roomCode, passphrase) {
 
     try {
         try {
-            const peerOptions = getPeerJsOptions(false);
+            const peerOptions = getPeerJsOptions("watch");
             mediaViewerPeer = new Peer(peerOptions);
         } catch (_) {
             mediaViewerPeer = new Peer();
