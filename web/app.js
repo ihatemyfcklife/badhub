@@ -85,7 +85,7 @@ async function initWasm() {
     const go = new Go();
 
     try {
-        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.9.5"), go.importObject);
+        const result = await WebAssembly.instantiateStreaming(fetch("main.wasm?v=1.9.6"), go.importObject);
         go.run(result.instance);
 
         // Await BadHub global bridge initialization
@@ -97,7 +97,7 @@ async function initWasm() {
 
         if (window.BadHub && window.BadHub.ready) {
             statusDot.className = "status-dot ready";
-            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.9.5";
+            const ver = window.BadHub.version ? (window.BadHub.version.startsWith("v") ? window.BadHub.version : "v" + window.BadHub.version) : "v1.9.6";
             statusText.innerText = "Engine Ready (" + ver + ")";
             checkSenderReady();
             checkUrlHash();
@@ -116,7 +116,7 @@ async function fetchGitHubBadHubVersion() {
     try {
         // 1. Check static version.json first (instant, unaffected by GitHub API rate limits)
         try {
-            const localResp = await fetch("version.json?v=1.9.5");
+            const localResp = await fetch("version.json?v=1.9.6");
             if (localResp.ok) {
                 const localData = await localResp.json();
                 if (localData && localData.version) {
@@ -2223,8 +2223,6 @@ let initialBlobLoaded = false;
 let mediaOpfsFileHandle = null;
 let mediaOpfsWritable = null;
 let mediaSelectedFileDuration = 0;
-let mediaDeclaredDuration = 0;
-let isUserScrubbing = false;
 let mediaVideoEventsAttached = false;
 
 // P2P Swarm Seeding state for the live media viewer (RLNC recode & re-broadcast)
@@ -2398,10 +2396,7 @@ async function generateWatchWebRTCAnswer() {
                         if (msg.type === "BH_MEDIA_STREAM_HEADER") {
                             const passphrase = document.getElementById("mediaWatchPassphrase")?.value.trim() || "badhub-live-stream-v1";
                             const metaBytes = new Uint8Array(msg.meta);
-                            const initRes = window.BadHub.initReceiver(metaBytes, passphrase, feedDecryptedMediaChunk);
-                            if (initRes && initRes.success) {
-                                if (msg.duration > 0) mediaDeclaredDuration = msg.duration;
-                            }
+                            window.BadHub.initReceiver(metaBytes, passphrase, feedDecryptedMediaChunk);
                         }
                     } catch (_) {}
                     return;
@@ -2952,7 +2947,6 @@ async function playNostrStream(roomId, passphrase) {
                     return;
                 }
                 isReceiverInitialized = true;
-                if (msg.duration && msg.duration > 0) mediaDeclaredDuration = msg.duration;
                 statusDot.className = "status-dot ready";
                 playbackState.innerText = "Playing Nostr stream";
                 if (bufferingOverlay) bufferingOverlay.classList.add("hidden");
@@ -3015,7 +3009,6 @@ async function playBroadcastChannelStream(channelId, passphrase) {
                     return;
                 }
                 isReceiverInitialized = true;
-                if (hdr.duration && hdr.duration > 0) mediaDeclaredDuration = hdr.duration;
                 statusDot.className = "status-dot ready";
                 playbackState.innerText = "Playing BroadcastChannel stream";
                 if (bufferingOverlay) bufferingOverlay.classList.add("hidden");
@@ -3367,9 +3360,6 @@ async function startStreamingPlayback(customParam) {
     const streamName = params ? (params.get("name") || "live-stream.mp4") : "live-stream.mp4";
     const streamType = params ? (params.get("type") || "video/mp4") : "video/mp4";
     const streamSize = params ? parseInt(params.get("size"), 10) : 0;
-    const streamDur = params ? parseFloat(params.get("dur")) : 0;
-    if (streamDur > 0) mediaDeclaredDuration = streamDur;
-
     currentStreamFileName = streamName;
     mediaStreamMime = streamType;
     mediaTotalFileSize = streamSize;
@@ -3430,14 +3420,18 @@ function initMediaPlayerViewport(name, mime, size) {
     const audioBox = document.getElementById("mediaAudioVisualizer");
     const audioLabel = document.getElementById("audioStreamLabel");
 
+    const viewport = document.getElementById("playerViewport");
     const isAudio = mime.startsWith("audio/");
+    // The native browser player stays visible in every mode: in audio ("Listen")
+    // mode the pulse visualizer is stacked above it instead of replacing it.
+    videoEl.classList.remove("hidden");
     if (isAudio) {
-        videoEl.classList.add("hidden");
         audioBox.classList.remove("hidden");
         audioLabel.innerText = `Audio Stream: ${name}`;
+        if (viewport) viewport.classList.add("audio-mode");
     } else {
-        videoEl.classList.remove("hidden");
         audioBox.classList.add("hidden");
+        if (viewport) viewport.classList.remove("audio-mode");
     }
 
     if (videoEl) {
@@ -3448,21 +3442,10 @@ function initMediaPlayerViewport(name, mime, size) {
             if (playbackState && playbackState.innerText.includes("Buffering")) {
                 playbackState.innerText = "Playing stream";
             }
-            const ppText = document.getElementById("playerPlayPauseText");
-            if (ppText) ppText.innerText = "PAUSE";
-        };
-        videoEl.onpause = () => {
-            const ppText = document.getElementById("playerPlayPauseText");
-            if (ppText) ppText.innerText = "PLAY";
         };
         videoEl.oncanplay = () => {
             const overlay = document.getElementById("playerBufferingOverlay");
             if (overlay) overlay.classList.add("hidden");
-        };
-        videoEl.onloadedmetadata = () => {
-            if (videoEl.duration && isFinite(videoEl.duration)) {
-                mediaDeclaredDuration = videoEl.duration;
-            }
         };
         videoEl.onerror = () => {
             console.warn("Video element stream source warning, falling back to direct blob buffering");
@@ -3470,8 +3453,6 @@ function initMediaPlayerViewport(name, mime, size) {
         };
         mediaVideoEventsAttached = true;
     }
-
-    startPlayerTimelineLoop();
 
     if (navigator.serviceWorker && navigator.serviceWorker.controller) {
         swStreamActive = true;
@@ -3554,7 +3535,6 @@ async function playWebRtcStream(roomCode, passphrase) {
                                 throw new Error("Metadata decryption failed: " + (initRes ? initRes.error : "incorrect passphrase"));
                             }
                             isReceiverInitialized = true;
-                            if (msg.duration && msg.duration > 0) mediaDeclaredDuration = msg.duration;
                             playbackState.innerText = "Playing live stream";
                             bufferingOverlay.classList.add("hidden");
 
@@ -3786,165 +3766,6 @@ function updateStreamTelemetry() {
     updateStreamSwarmMetric();
 }
 
-// ============================
-// Custom Player Controls Logic
-// ============================
-
-let playerTimelineInterval = null;
-
-function formatPlayerTime(seconds) {
-    if (!seconds || !isFinite(seconds) || seconds < 0) return "00:00";
-    const s = Math.floor(seconds);
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    const mm = String(m).padStart(2, "0");
-    const ss = String(sec).padStart(2, "0");
-    if (h > 0) {
-        return `${h}:${mm}:${ss}`;
-    }
-    return `${mm}:${ss}`;
-}
-
-function getPlayerDuration() {
-    const videoEl = document.getElementById("mediaStreamVideo");
-    if (videoEl && videoEl.duration && isFinite(videoEl.duration)) {
-        return videoEl.duration;
-    }
-    return mediaDeclaredDuration || 0;
-}
-
-function togglePlayerPlayPause() {
-    const videoEl = document.getElementById("mediaStreamVideo");
-    if (!videoEl) return;
-    if (videoEl.paused || videoEl.ended) {
-        videoEl.play().catch(() => {});
-    } else {
-        videoEl.pause();
-    }
-}
-
-function skipPlayerTime(delta) {
-    const videoEl = document.getElementById("mediaStreamVideo");
-    if (!videoEl) return;
-    const dur = getPlayerDuration();
-    if (dur > 0) {
-        videoEl.currentTime = Math.max(0, Math.min(dur, videoEl.currentTime + delta));
-    } else {
-        videoEl.currentTime = Math.max(0, videoEl.currentTime + delta);
-    }
-}
-
-function onTimelineSliderInput(val) {
-    isUserScrubbing = true;
-    const pct = parseFloat(val);
-    const playedBar = document.getElementById("timelinePlayedBar");
-    if (playedBar) playedBar.style.width = pct + "%";
-
-    const dur = getPlayerDuration();
-    if (dur > 0) {
-        const curTimeEl = document.getElementById("playerCurrentTime");
-        if (curTimeEl) curTimeEl.innerText = formatPlayerTime((pct / 100) * dur);
-    }
-}
-
-function onTimelineSliderChange(val) {
-    const pct = parseFloat(val);
-    const dur = getPlayerDuration();
-    const videoEl = document.getElementById("mediaStreamVideo");
-    if (videoEl && dur > 0) {
-        videoEl.currentTime = (pct / 100) * dur;
-    }
-    isUserScrubbing = false;
-}
-
-function onTimelineBarClick(event) {
-    const bar = document.getElementById("timelineBarBg");
-    if (!bar) return;
-    const rect = bar.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(100, ((event.clientX - rect.left) / rect.width) * 100));
-    const dur = getPlayerDuration();
-    const videoEl = document.getElementById("mediaStreamVideo");
-    if (videoEl && dur > 0) {
-        videoEl.currentTime = (pct / 100) * dur;
-    }
-    const playedBar = document.getElementById("timelinePlayedBar");
-    if (playedBar) playedBar.style.width = pct + "%";
-    const slider = document.getElementById("timelineSeekSlider");
-    if (slider) slider.value = pct;
-}
-
-function changePlayerPlaybackSpeed(speed) {
-    const videoEl = document.getElementById("mediaStreamVideo");
-    if (videoEl) {
-        videoEl.playbackRate = parseFloat(speed) || 1;
-    }
-}
-
-function togglePlayerMute() {
-    const videoEl = document.getElementById("mediaStreamVideo");
-    const muteText = document.getElementById("playerMuteText");
-    if (!videoEl) return;
-    videoEl.muted = !videoEl.muted;
-    if (muteText) muteText.innerText = videoEl.muted ? "MUTE" : "VOL";
-}
-
-function togglePlayerFullscreen() {
-    const viewport = document.getElementById("playerViewport");
-    if (!viewport) return;
-    if (document.fullscreenElement) {
-        document.exitFullscreen().catch(() => {});
-    } else {
-        viewport.requestFullscreen().catch(() => {});
-    }
-}
-
-function updatePlayerTimeline() {
-    if (isUserScrubbing) return;
-    const videoEl = document.getElementById("mediaStreamVideo");
-    if (!videoEl) return;
-
-    const dur = getPlayerDuration();
-    const cur = videoEl.currentTime || 0;
-
-    const curTimeEl = document.getElementById("playerCurrentTime");
-    const totDurEl = document.getElementById("playerTotalDuration");
-    if (curTimeEl) curTimeEl.innerText = formatPlayerTime(cur);
-    if (totDurEl) totDurEl.innerText = dur > 0 ? formatPlayerTime(dur) : "--:--";
-
-    if (dur > 0) {
-        const pct = Math.min(100, (cur / dur) * 100);
-        const playedBar = document.getElementById("timelinePlayedBar");
-        const slider = document.getElementById("timelineSeekSlider");
-        if (playedBar) playedBar.style.width = pct + "%";
-        if (slider) slider.value = pct;
-    }
-
-    // Update buffered bar based on download progress
-    if (mediaTotalFileSize > 0) {
-        const bufPct = Math.min(100, (mediaTotalReceivedBytes / mediaTotalFileSize) * 100);
-        const bufferedBar = document.getElementById("timelineBufferedBar");
-        if (bufferedBar) bufferedBar.style.width = bufPct + "%";
-    } else if (videoEl.buffered && videoEl.buffered.length > 0 && dur > 0) {
-        const buffEnd = videoEl.buffered.end(videoEl.buffered.length - 1);
-        const bufPct = Math.min(100, (buffEnd / dur) * 100);
-        const bufferedBar = document.getElementById("timelineBufferedBar");
-        if (bufferedBar) bufferedBar.style.width = bufPct + "%";
-    }
-}
-
-function startPlayerTimelineLoop() {
-    stopPlayerTimelineLoop();
-    playerTimelineInterval = setInterval(updatePlayerTimeline, 250);
-}
-
-function stopPlayerTimelineLoop() {
-    if (playerTimelineInterval) {
-        clearInterval(playerTimelineInterval);
-        playerTimelineInterval = null;
-    }
-}
-
 async function finalizeMediaStreamPlayback() {
     const playbackState = document.getElementById("streamPlaybackState");
     const saveContainer = document.getElementById("mediaStreamSaveContainer");
@@ -3991,8 +3812,6 @@ async function finalizeMediaStreamPlayback() {
 function stopStreamingPlayback() {
     isStreamingPlayback = false;
     releaseWakeLock();
-    stopPlayerTimelineLoop();
-
     const videoEl = document.getElementById("mediaStreamVideo");
     if (videoEl) {
         videoEl.pause();
@@ -4018,20 +3837,13 @@ function stopStreamingPlayback() {
     const recodedMetricEl = document.getElementById("streamMetricRecoded");
     if (recodedMetricEl) recodedMetricEl.innerText = "0 frames";
 
-    mediaDeclaredDuration = 0;
-    isUserScrubbing = false;
     mediaVideoEventsAttached = false;
 
-    const playedBar = document.getElementById("timelinePlayedBar");
-    const bufferedBar = document.getElementById("timelineBufferedBar");
-    const slider = document.getElementById("timelineSeekSlider");
-    const curTime = document.getElementById("playerCurrentTime");
-    const totDur = document.getElementById("playerTotalDuration");
-    if (playedBar) playedBar.style.width = "0%";
-    if (bufferedBar) bufferedBar.style.width = "0%";
-    if (slider) slider.value = 0;
-    if (curTime) curTime.innerText = "00:00";
-    if (totDur) totDur.innerText = "--:--";
+    // Restore the default viewport: native player only, no audio visualizer
+    const audioBox = document.getElementById("mediaAudioVisualizer");
+    if (audioBox) audioBox.classList.add("hidden");
+    const viewport = document.getElementById("playerViewport");
+    if (viewport) viewport.classList.remove("audio-mode");
 
     document.getElementById("btnConnectStream").classList.remove("hidden");
     document.getElementById("btnDisconnectStream").classList.add("hidden");
@@ -4120,7 +3932,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     // Setup Service Worker for in-browser video & audio streaming
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw-stream.js?v=1.9.5', { scope: './' })
+        navigator.serviceWorker.register('sw-stream.js?v=1.9.6', { scope: './' })
             .then(reg => {
                 console.log('Stream ServiceWorker registered with scope:', reg.scope);
             })

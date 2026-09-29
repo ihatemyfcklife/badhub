@@ -1142,6 +1142,17 @@ body {
     max-height: 520px;
 }
 
+/* Audio ("Listen") mode: pulse visualizer stacked above the native browser player */
+.player-viewport.audio-mode {
+    flex-direction: column;
+}
+
+.player-viewport.audio-mode .local-preview-player {
+    width: 100%;
+    height: 72px;
+    max-height: 72px;
+}
+
 .player-viewport .audio-visualizer-box {
     border-radius: var(--radius-sm);
 }
@@ -1233,163 +1244,6 @@ body {
     display: flex;
     flex-direction: column;
     gap: 8px;
-}
-
-/* Custom Cyberpunk Player Controls Bar */
-.player-custom-controls {
-    background: #080c14;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    padding: 12px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-}
-
-.timeline-wrapper {
-    position: relative;
-    width: 100%;
-    height: 18px;
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-}
-
-.timeline-bar-bg {
-    position: relative;
-    width: 100%;
-    height: 6px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 3px;
-    overflow: hidden;
-    transition: height 0.15s ease;
-}
-
-.timeline-wrapper:hover .timeline-bar-bg {
-    height: 10px;
-}
-
-.timeline-buffered-bar {
-    position: absolute;
-    top: 0;
-    left: 0;
-    height: 100%;
-    background: rgba(0, 240, 255, 0.3);
-    border-radius: 3px;
-    pointer-events: none;
-    transition: width 0.2s ease;
-}
-
-.timeline-played-bar {
-    position: absolute;
-    top: 0;
-    left: 0;
-    height: 100%;
-    background: linear-gradient(90deg, #00f0ff, #00b4d8);
-    box-shadow: 0 0 8px rgba(0, 240, 255, 0.8);
-    border-radius: 3px;
-    pointer-events: none;
-    transition: width 0.1s linear;
-}
-
-.timeline-slider {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    opacity: 0;
-    cursor: pointer;
-    margin: 0;
-    z-index: 5;
-}
-
-.player-controls-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-}
-
-.controls-left, .controls-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.btn-player-ctrl {
-    background: rgba(18, 29, 48, 0.85);
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
-    padding: 6px 12px;
-    border-radius: var(--radius-sm);
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    font-weight: 700;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    user-select: none;
-}
-
-.btn-player-ctrl:hover {
-    background: var(--accent-cyan);
-    color: #0a0e17;
-    border-color: var(--accent-cyan);
-    box-shadow: 0 0 12px var(--accent-cyan-glow);
-}
-
-.btn-player-ctrl:active {
-    transform: scale(0.96);
-}
-
-.player-time-display {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-family: var(--font-mono);
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-    margin-left: 6px;
-    user-select: none;
-}
-
-.player-time-display .time-sep {
-    opacity: 0.5;
-}
-
-.speed-selector-box {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.speed-label {
-    font-size: 0.75rem;
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-}
-
-.speed-select {
-    background: rgba(18, 29, 48, 0.85);
-    border: 1px solid var(--border-color);
-    color: var(--accent-cyan);
-    padding: 5px 8px;
-    border-radius: var(--radius-sm);
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    cursor: pointer;
-    outline: none;
-}
-
-.speed-select:focus {
-    border-color: var(--accent-cyan);
 }
 
 /* Custom Popup Modal */
