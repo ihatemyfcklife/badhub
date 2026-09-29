@@ -2466,6 +2466,35 @@ async function startMediaBroadcast() {
     } else if (transport === "blossom") {
         statusEl.innerText = "Encrypting & Uploading to Blossom Relays...";
         await broadcastViaBlossom(passphrase);
+
+    } else if (transport === "nostr") {
+        if (typeof window.NostrTools === "undefined") {
+            showPopup("Nostr library not loaded. Please check your connection.", "error");
+            stopMediaBroadcast();
+            return;
+        }
+        statusEl.innerText = "Starting Nostr stream broadcast...";
+        const streamRoomId = "bh-media-" + Math.random().toString(36).substring(2, 10);
+        const durParam = mediaSelectedFileDuration > 0 ? `&dur=${Math.round(mediaSelectedFileDuration)}` : "";
+        const streamUrl = `${window.location.origin}${window.location.pathname}#stream=nostr&room=${encodeURIComponent(streamRoomId)}&key=${encodeURIComponent(passphrase)}&name=${encodeURIComponent(mediaSelectedFile.name)}&type=${encodeURIComponent(mediaSelectedFile.type || "video/mp4")}&size=${mediaSelectedFile.size}${durParam}`;
+        linkInput.value = streamUrl;
+        const nostrLinkInput = document.getElementById("mediaNostrLinkInput");
+        if (nostrLinkInput) nostrLinkInput.value = streamUrl;
+        renderMediaQr(streamUrl);
+        statusEl.innerText = "Broadcasting via Nostr relays...";
+        await streamMediaViaNostr(streamRoomId, passphrase, redundancy);
+
+    } else if (transport === "broadcast") {
+        statusEl.innerText = "Starting BroadcastChannel stream...";
+        const channelId = "bh-media-bc-" + Math.random().toString(36).substring(2, 10);
+        const durParam = mediaSelectedFileDuration > 0 ? `&dur=${Math.round(mediaSelectedFileDuration)}` : "";
+        const streamUrl = `${window.location.origin}${window.location.pathname}#stream=broadcast&room=${encodeURIComponent(channelId)}&key=${encodeURIComponent(passphrase)}&name=${encodeURIComponent(mediaSelectedFile.name)}&type=${encodeURIComponent(mediaSelectedFile.type || "video/mp4")}&size=${mediaSelectedFile.size}${durParam}`;
+        linkInput.value = streamUrl;
+        const bcLinkInput = document.getElementById("mediaBroadcastChannelInput");
+        if (bcLinkInput) bcLinkInput.value = streamUrl;
+        renderMediaQr(streamUrl);
+        statusEl.innerText = "Broadcasting via BroadcastChannel...";
+        await streamMediaViaBroadcastChannel(channelId, passphrase, redundancy);
     }
 }
 
@@ -2531,6 +2560,272 @@ async function streamMediaToViewer(conn, passphrase, redundancy) {
     } catch (err) {
         console.warn("Stream transmission to viewer ended:", err);
     }
+}
+
+// ------------------------------------------
+// NOSTR STREAM BROADCAST (Sender)
+// ------------------------------------------
+async function streamMediaViaNostr(roomId, passphrase, redundancy) {
+    const statusEl = document.getElementById("mediaBroadcastStatus");
+    const chunksEl = document.getElementById("mediaChunksStreamed");
+    const bitrateEl = document.getElementById("mediaBitrate");
+    const file = mediaSelectedFile;
+    if (!file) return;
+
+    const pool = getNostrPool();
+    if (!pool) return;
+
+    let nostrPrivKey = window.NostrTools.generatePrivateKey();
+
+    const arrayBuf = await file.arrayBuffer();
+    const fileBytes = new Uint8Array(arrayBuf);
+
+    const senderRes = window.BadHub.initSender(file.name, fileBytes, passphrase, redundancy, 64, 64);
+    if (!senderRes || !senderRes.success) {
+        showPopup("Failed to initialize sender: " + (senderRes ? senderRes.error : "unknown error"), "error");
+        stopMediaBroadcast();
+        return;
+    }
+
+    const headerPayload = {
+        type: "BH_MEDIA_STREAM_HEADER",
+        name: file.name,
+        size: file.size,
+        mime: file.type || "video/mp4",
+        duration: mediaSelectedFileDuration || 0,
+        meta: Array.from(senderRes.encryptedMetadata)
+    };
+    const headerStr = JSON.stringify(headerPayload);
+    const headerBytes = new TextEncoder().encode(headerStr);
+
+    const publishEvent = async (bytes, tag) => {
+        let binary = "";
+        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        const b64 = btoa(binary);
+        const ev = window.NostrTools.finishEvent({
+            kind: 20001,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [["d", roomId], ["t", tag]],
+            content: b64
+        }, nostrPrivKey);
+        pool.publish(NOSTR_RELAYS, ev);
+    };
+
+    // Emit header 5 times for reliability
+    for (let i = 0; i < 5; i++) {
+        await publishEvent(headerBytes, "badhub-media-header");
+        await new Promise(r => setTimeout(r, 30));
+    }
+
+    let chunksStreamed = 0;
+    while (isBroadcastingMedia) {
+        const frameRes = window.BadHub.nextSenderFrame();
+        if (frameRes.error || frameRes.eof) break;
+        if (frameRes.frame) {
+            await publishEvent(frameRes.frame, "badhub-media-frame");
+            chunksStreamed++;
+            mediaTotalStreamedBytes += frameRes.frame.length;
+            if (chunksEl) chunksEl.innerText = chunksStreamed;
+            const elapsedSec = (performance.now() - mediaBroadcastStartTime) / 1000;
+            if (elapsedSec > 0 && bitrateEl) {
+                bitrateEl.innerText = `${((mediaTotalStreamedBytes / 1048576) / elapsedSec).toFixed(2)} MB/s`;
+            }
+            await new Promise(r => setTimeout(r, 5));
+        }
+    }
+    if (statusEl) statusEl.innerText = "Nostr broadcast complete.";
+}
+
+// ------------------------------------------
+// BROADCASTCHANNEL STREAM BROADCAST (Sender)
+// ------------------------------------------
+async function streamMediaViaBroadcastChannel(channelId, passphrase, redundancy) {
+    const statusEl = document.getElementById("mediaBroadcastStatus");
+    const chunksEl = document.getElementById("mediaChunksStreamed");
+    const bitrateEl = document.getElementById("mediaBitrate");
+    const file = mediaSelectedFile;
+    if (!file) return;
+
+    const bc = new BroadcastChannel(channelId);
+
+    const arrayBuf = await file.arrayBuffer();
+    const fileBytes = new Uint8Array(arrayBuf);
+
+    const senderRes = window.BadHub.initSender(file.name, fileBytes, passphrase, redundancy, 64, 64);
+    if (!senderRes || !senderRes.success) {
+        showPopup("Failed to initialize sender: " + (senderRes ? senderRes.error : "unknown error"), "error");
+        bc.close();
+        stopMediaBroadcast();
+        return;
+    }
+
+    const headerPayload = {
+        type: "BH_MEDIA_STREAM_HEADER",
+        name: file.name,
+        size: file.size,
+        mime: file.type || "video/mp4",
+        duration: mediaSelectedFileDuration || 0,
+        meta: Array.from(senderRes.encryptedMetadata)
+    };
+
+    // Emit header 5 times
+    for (let i = 0; i < 5; i++) {
+        bc.postMessage({ type: "header", data: headerPayload });
+        await new Promise(r => setTimeout(r, 15));
+    }
+
+    let chunksStreamed = 0;
+    while (isBroadcastingMedia) {
+        const frameRes = window.BadHub.nextSenderFrame();
+        if (frameRes.error || frameRes.eof) break;
+        if (frameRes.frame) {
+            bc.postMessage({ type: "frame", data: frameRes.frame.buffer });
+            chunksStreamed++;
+            mediaTotalStreamedBytes += frameRes.frame.length;
+            if (chunksEl) chunksEl.innerText = chunksStreamed;
+            const elapsedSec = (performance.now() - mediaBroadcastStartTime) / 1000;
+            if (elapsedSec > 0 && bitrateEl) {
+                bitrateEl.innerText = `${((mediaTotalStreamedBytes / 1048576) / elapsedSec).toFixed(2)} MB/s`;
+            }
+        }
+    }
+    bc.close();
+    if (statusEl) statusEl.innerText = "BroadcastChannel stream complete.";
+}
+
+// ------------------------------------------
+// NOSTR STREAM VIEWER
+// ------------------------------------------
+async function playNostrStream(roomId, passphrase) {
+    const statusDot = document.getElementById("streamPlayerStatusDot");
+    const playbackState = document.getElementById("streamPlaybackState");
+    const bufferingOverlay = document.getElementById("playerBufferingOverlay");
+
+    if (typeof window.NostrTools === "undefined") {
+        playbackState.innerText = "Nostr library not available.";
+        return;
+    }
+
+    const pool = getNostrPool();
+    statusDot.className = "status-dot loading";
+    playbackState.innerText = "Connecting to Nostr stream...";
+
+    let isReceiverInitialized = false;
+    const pendingFrames = [];
+
+    const sub = pool.sub(NOSTR_RELAYS, [{ kinds: [20001], "#d": [roomId] }]);
+
+    sub.on("event", async event => {
+        if (!isStreamingPlayback) return;
+        const tag = event.tags && event.tags.find(t => t[0] === "t");
+        const tagVal = tag ? tag[1] : "";
+
+        let bytes;
+        try {
+            const binaryStr = atob(event.content);
+            bytes = new Uint8Array(binaryStr.length);
+            for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+        } catch (e) { return; }
+
+        if (tagVal === "badhub-media-header") {
+            if (isReceiverInitialized) return;
+            try {
+                const msg = JSON.parse(new TextDecoder().decode(bytes));
+                if (msg.type !== "BH_MEDIA_STREAM_HEADER") return;
+                const metaBytes = new Uint8Array(msg.meta);
+                const initRes = window.BadHub.initReceiver(metaBytes, passphrase, feedDecryptedMediaChunk);
+                if (!initRes || !initRes.success) {
+                    playbackState.innerText = "Decryption failed: wrong passphrase?";
+                    return;
+                }
+                isReceiverInitialized = true;
+                if (msg.duration && msg.duration > 0) mediaDeclaredDuration = msg.duration;
+                statusDot.className = "status-dot ready";
+                playbackState.innerText = "Playing Nostr stream";
+                if (bufferingOverlay) bufferingOverlay.classList.add("hidden");
+                for (const f of pendingFrames) {
+                    const r = window.BadHub.ingestReceiverFrame(f);
+                    if (r && r.completed) { finalizeMediaStreamPlayback(); break; }
+                }
+                pendingFrames.length = 0;
+            } catch (e) { console.warn("Nostr header parse error:", e); }
+            return;
+        }
+
+        if (tagVal === "badhub-media-frame") {
+            if (!isReceiverInitialized) { pendingFrames.push(bytes); return; }
+            const r = window.BadHub.ingestReceiverFrame(bytes);
+            if (r && r.completed) finalizeMediaStreamPlayback();
+            updateStreamTelemetry();
+        }
+    });
+
+    // Keep sub alive until playback stops
+    const pollInterval = setInterval(() => {
+        if (!isStreamingPlayback) {
+            sub.unsub();
+            clearInterval(pollInterval);
+        }
+    }, 2000);
+}
+
+// ------------------------------------------
+// BROADCASTCHANNEL STREAM VIEWER
+// ------------------------------------------
+async function playBroadcastChannelStream(channelId, passphrase) {
+    const statusDot = document.getElementById("streamPlayerStatusDot");
+    const playbackState = document.getElementById("streamPlaybackState");
+    const bufferingOverlay = document.getElementById("playerBufferingOverlay");
+
+    statusDot.className = "status-dot loading";
+    playbackState.innerText = "Connecting to BroadcastChannel stream...";
+
+    const bc = new BroadcastChannel(channelId);
+    let isReceiverInitialized = false;
+    const pendingFrames = [];
+
+    bc.onmessage = async e => {
+        if (!isStreamingPlayback) { bc.close(); return; }
+        const msg = e.data;
+        if (!msg) return;
+
+        if (msg.type === "header") {
+            if (isReceiverInitialized) return;
+            try {
+                const hdr = msg.data;
+                const metaBytes = new Uint8Array(hdr.meta);
+                const initRes = window.BadHub.initReceiver(metaBytes, passphrase, feedDecryptedMediaChunk);
+                if (!initRes || !initRes.success) {
+                    playbackState.innerText = "Decryption failed: wrong passphrase?";
+                    return;
+                }
+                isReceiverInitialized = true;
+                if (hdr.duration && hdr.duration > 0) mediaDeclaredDuration = hdr.duration;
+                statusDot.className = "status-dot ready";
+                playbackState.innerText = "Playing BroadcastChannel stream";
+                if (bufferingOverlay) bufferingOverlay.classList.add("hidden");
+                for (const f of pendingFrames) {
+                    const r = window.BadHub.ingestReceiverFrame(f);
+                    if (r && r.completed) { finalizeMediaStreamPlayback(); break; }
+                }
+                pendingFrames.length = 0;
+            } catch (e) { console.warn("BC header error:", e); }
+            return;
+        }
+
+        if (msg.type === "frame") {
+            const frameBytes = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data);
+            if (!isReceiverInitialized) { pendingFrames.push(frameBytes); return; }
+            const r = window.BadHub.ingestReceiverFrame(frameBytes);
+            if (r && r.completed) { finalizeMediaStreamPlayback(); bc.close(); }
+            updateStreamTelemetry();
+        }
+    };
+
+    // Keep alive check
+    const pollInterval = setInterval(() => {
+        if (!isStreamingPlayback) { bc.close(); clearInterval(pollInterval); }
+    }, 2000);
 }
 
 async function broadcastViaBlossom(passphrase) {
@@ -2885,6 +3180,14 @@ async function startStreamingPlayback(customParam) {
         }
         const fullUrl = (blobId && blobId.startsWith("http")) ? blobId : `${server.replace(/\/+$/, "")}/${blobId || ''}`;
         await playBlossomStream(fullUrl, passphrase);
+    } else if (streamMode === "nostr") {
+        liveBadge.innerText = "NOSTR STREAM";
+        liveBadge.style.display = "inline-block";
+        await playNostrStream(roomCode, passphrase);
+    } else if (streamMode === "broadcast") {
+        liveBadge.innerText = "LOCAL BROADCAST";
+        liveBadge.style.display = "inline-block";
+        await playBroadcastChannelStream(roomCode, passphrase);
     } else {
         liveBadge.innerText = "LIVE P2P";
         liveBadge.style.display = "inline-block";
