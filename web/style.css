@@ -1118,9 +1118,11 @@ body {
     font-size: 0.8rem;
 }
 
+/* Native player size: the Broadcast Media preview and the Watch & Listen
+   player share this rule so both render with the exact same height */
 .local-preview-player {
     width: 100%;
-    max-height: 220px;
+    max-height: 520px;
     background: #000;
     border-radius: var(--radius-sm);
     outline: none;
@@ -1136,10 +1138,6 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-}
-
-.player-viewport .local-preview-player {
-    max-height: 520px;
 }
 
 /* Audio ("Listen") mode: pulse visualizer stacked above the native browser player */
