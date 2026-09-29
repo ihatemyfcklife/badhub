@@ -471,7 +471,12 @@ const OPENRELAY_SERVERS = [
 ];
 
 function getEffectiveIceConfig(forSender) {
-    const prefix = forSender ? "send" : "recv";
+    let prefix;
+    if (forSender === "media") {
+        prefix = "media";
+    } else {
+        prefix = forSender ? "send" : "recv";
+    }
     const isRelay = document.getElementById(prefix + "RelayToggle")?.checked || false;
 
     const customUrl = document.getElementById(prefix + "TurnUrl")?.value.trim();
@@ -617,24 +622,25 @@ async function confirmDiskDestination() {
 }
 
 function onCustomTurnChange(prefix) {
-    const isSender = (prefix === "send");
     const url = document.getElementById(prefix + "TurnUrl")?.value.trim() || "";
     const user = document.getElementById(prefix + "TurnUser")?.value.trim() || "";
     const pass = document.getElementById(prefix + "TurnPass")?.value.trim() || "";
 
-    const otherPrefix = isSender ? "recv" : "send";
-    const otherUrl = document.getElementById(otherPrefix + "TurnUrl");
-    const otherUser = document.getElementById(otherPrefix + "TurnUser");
-    const otherPass = document.getElementById(otherPrefix + "TurnPass");
-    if (otherUrl && !otherUrl.value) otherUrl.value = url;
-    if (otherUser && !otherUser.value) otherUser.value = user;
-    if (otherPass && !otherPass.value) otherPass.value = pass;
+    // Sync to all other prefixes that have no value yet
+    ["send", "recv", "media"].filter(p => p !== prefix).forEach(otherPrefix => {
+        const otherUrl = document.getElementById(otherPrefix + "TurnUrl");
+        const otherUser = document.getElementById(otherPrefix + "TurnUser");
+        const otherPass = document.getElementById(otherPrefix + "TurnPass");
+        if (otherUrl && !otherUrl.value) otherUrl.value = url;
+        if (otherUser && !otherUser.value) otherUser.value = user;
+        if (otherPass && !otherPass.value) otherPass.value = pass;
+    });
 
     try {
         localStorage.setItem("badhub_turn_config", JSON.stringify({ url, user, pass }));
     } catch (e) {}
 
-    if (isSender && currentRoomId && selectedFile) {
+    if (prefix === "send" && currentRoomId && selectedFile) {
         armSenderRoom(currentRoomId);
     }
 }
@@ -644,7 +650,7 @@ function restoreSavedTurnConfig() {
         const saved = localStorage.getItem("badhub_turn_config");
         if (saved) {
             const cfg = JSON.parse(saved);
-            ["send", "recv"].forEach(p => {
+            ["send", "recv", "media"].forEach(p => {
                 const urlEl = document.getElementById(p + "TurnUrl");
                 const userEl = document.getElementById(p + "TurnUser");
                 const passEl = document.getElementById(p + "TurnPass");
@@ -2242,13 +2248,69 @@ function switchMediaMode(mode) {
 // Transport Switching for Media Broadcast
 function switchMediaTransport(mode) {
     const blossomBox = document.getElementById("mediaBlossomBox");
-    if (blossomBox) {
-        if (mode === "blossom") {
-            blossomBox.classList.remove("hidden");
+    const nostrBox = document.getElementById("mediaNostrBox");
+    const broadcastBox = document.getElementById("mediaBroadcastChannelBox");
+    const privacyBox = document.getElementById("mediaPrivacyBox");
+
+    // Hide all mode-specific boxes first
+    if (blossomBox) blossomBox.classList.add("hidden");
+    if (nostrBox) nostrBox.classList.add("hidden");
+    if (broadcastBox) broadcastBox.classList.add("hidden");
+
+    if (mode === "webrtc") {
+        if (privacyBox) privacyBox.classList.remove("hidden");
+    } else if (mode === "blossom") {
+        if (blossomBox) blossomBox.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.add("hidden");
+    } else if (mode === "nostr") {
+        if (nostrBox) nostrBox.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.add("hidden");
+        // Populate Nostr link if a file is already armed
+        const linkInput = document.getElementById("mediaNostrLinkInput");
+        const existingLink = document.getElementById("mediaStreamLinkInput")?.value;
+        if (linkInput && existingLink) linkInput.value = existingLink;
+    } else if (mode === "broadcast") {
+        if (broadcastBox) broadcastBox.classList.remove("hidden");
+        if (privacyBox) privacyBox.classList.add("hidden");
+        const linkInput = document.getElementById("mediaBroadcastChannelInput");
+        const existingLink = document.getElementById("mediaStreamLinkInput")?.value;
+        if (linkInput && existingLink) linkInput.value = existingLink;
+    }
+}
+
+function toggleMediaRelay(checked) {
+    const badge = document.getElementById("mediaPrivacyBadge");
+    if (badge) {
+        if (checked) {
+            badge.innerText = "TURN Relay Active (IPs Masked)";
+            badge.className = "privacy-badge badge-relay";
         } else {
-            blossomBox.classList.add("hidden");
+            badge.innerText = "Direct P2P (IP Visible)";
+            badge.className = "privacy-badge badge-direct";
         }
     }
+}
+
+function copyMediaNostrLink() {
+    const input = document.getElementById("mediaNostrLinkInput");
+    if (!input || !input.value) return;
+    navigator.clipboard.writeText(input.value).then(() => {
+        showPopup("Stream link copied to clipboard!", "success");
+    }).catch(() => {
+        input.select();
+        document.execCommand("copy");
+    });
+}
+
+function copyMediaBroadcastChannelLink() {
+    const input = document.getElementById("mediaBroadcastChannelInput");
+    if (!input || !input.value) return;
+    navigator.clipboard.writeText(input.value).then(() => {
+        showPopup("Channel link copied to clipboard!", "success");
+    }).catch(() => {
+        input.select();
+        document.execCommand("copy");
+    });
 }
 
 function onMediaBlossomServerChange(val) {
@@ -2351,7 +2413,7 @@ async function startMediaBroadcast() {
         const streamRoomId = "bh-stream-" + Math.random().toString(36).substring(2, 10);
 
         try {
-            const peerOptions = getPeerJsOptions(true);
+            const peerOptions = getPeerJsOptions("media");
             mediaBroadcastPeer = new Peer(streamRoomId, peerOptions);
         } catch (e) {
             mediaBroadcastPeer = new Peer(streamRoomId);
@@ -2362,6 +2424,10 @@ async function startMediaBroadcast() {
             const durParam = mediaSelectedFileDuration > 0 ? `&dur=${Math.round(mediaSelectedFileDuration)}` : "";
             const streamUrl = `${window.location.origin}${window.location.pathname}#stream=p2p&room=${encodeURIComponent(id)}&key=${encodeURIComponent(passphrase)}&name=${encodeURIComponent(mediaSelectedFile.name)}&type=${encodeURIComponent(mediaSelectedFile.type || "video/mp4")}&size=${mediaSelectedFile.size}${durParam}`;
             linkInput.value = streamUrl;
+            const nostrLinkInput = document.getElementById("mediaNostrLinkInput");
+            if (nostrLinkInput) nostrLinkInput.value = streamUrl;
+            const bcLinkInput = document.getElementById("mediaBroadcastChannelInput");
+            if (bcLinkInput) bcLinkInput.value = streamUrl;
             renderMediaQr(streamUrl);
         });
 

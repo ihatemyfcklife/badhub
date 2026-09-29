@@ -508,11 +508,49 @@
                                 <input type="radio" name="mediaTransport" value="blossom" onchange="switchMediaTransport('blossom')">
                                 <span>Decentralized Blossom Relays (Asynchronous Stream via Relays)</span>
                             </label>
+                            <label class="radio-label">
+                                <input type="radio" name="mediaTransport" value="nostr" onchange="switchMediaTransport('nostr')">
+                                <span>Decentralized Nostr Relays (Zero IP Exposure)</span>
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="mediaTransport" value="broadcast" onchange="switchMediaTransport('broadcast')">
+                                <span>BroadcastChannel (Tab-to-Tab Local)</span>
+                            </label>
                         </div>
                     </div>
 
+                    <!-- IP Privacy & TURN Relay Box for Media Broadcaster -->
+                    <div class="privacy-box" id="mediaPrivacyBox">
+                        <div class="privacy-header">
+                            <label class="toggle-label" for="mediaRelayToggle">
+                                <input type="checkbox" id="mediaRelayToggle" onchange="toggleMediaRelay(this.checked)">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-text">Hide IP Address (TURN Relay Mode)</span>
+                            </label>
+                            <span class="privacy-badge badge-direct" id="mediaPrivacyBadge">Direct P2P (IP Visible)</span>
+                        </div>
+                        <p class="privacy-hint">Forces traffic through a zero-knowledge TURN relay so peers never learn each other's IP addresses.</p>
+                        <details class="custom-turn-drawer" id="mediaCustomTurnDrawer">
+                            <summary>Custom TURN Server (Optional)</summary>
+                            <div class="custom-turn-grid">
+                                <div class="form-group">
+                                    <label for="mediaTurnUrl">TURN Server (URL)</label>
+                                    <input type="text" id="mediaTurnUrl" class="input-text font-mono" placeholder="turn:openrelay.metered.ca:80" oninput="onCustomTurnChange('media')">
+                                </div>
+                                <div class="form-group">
+                                    <label for="mediaTurnUser">Username</label>
+                                    <input type="text" id="mediaTurnUser" class="input-text font-mono" placeholder="openrelayproject" oninput="onCustomTurnChange('media')">
+                                </div>
+                                <div class="form-group">
+                                    <label for="mediaTurnPass">Credential</label>
+                                    <input type="password" id="mediaTurnPass" class="input-text font-mono" placeholder="openrelayproject" oninput="onCustomTurnChange('media')">
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+
                     <!-- Decentralized Blossom Storage Box for Media Broadcaster -->
-                    <div id="mediaBlossomBox" class="magic-box hidden" style="margin-top: 15px;">
+                    <div id="mediaBlossomBox" class="magic-box hidden">
                         <div class="privacy-header">
                             <label class="control-label font-bold" style="color: var(--accent-cyan);">Decentralized Blossom Relay Network</label>
                             <span class="privacy-badge badge-turn">Asynchronous</span>
@@ -533,6 +571,42 @@
                         <div class="form-group hidden" id="customMediaBlossomServerGroup">
                             <label for="txtCustomMediaBlossomServer">Custom Blossom Relay URL</label>
                             <input type="text" id="txtCustomMediaBlossomServer" class="input-text font-mono" placeholder="https://my-blossom-server.example.com">
+                        </div>
+                    </div>
+
+                    <!-- Nostr Relay Box for Media Broadcaster -->
+                    <div id="mediaNostrBox" class="magic-box hidden">
+                        <div class="privacy-header">
+                            <label class="control-label font-bold" style="color: var(--accent-cyan);">Nostr Relay Network</label>
+                            <span class="privacy-badge badge-turn">Zero IP Exposure</span>
+                        </div>
+                        <p class="privacy-hint" style="margin-top: 6px;">
+                            Routes the encrypted media stream through decentralized Nostr relays. Neither IP addresses nor metadata are exposed to the relay network.
+                        </p>
+                        <div class="share-box" style="margin-top: 10px;">
+                            <label>Nostr Stream Link</label>
+                            <div class="share-input-group">
+                                <input type="text" id="mediaNostrLinkInput" class="input-text font-mono" readonly placeholder="Select a file to generate Nostr stream link...">
+                                <button class="btn btn-secondary" onclick="copyMediaNostrLink()">Copy Link</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- BroadcastChannel Box for Media Broadcaster -->
+                    <div id="mediaBroadcastChannelBox" class="magic-box hidden">
+                        <div class="privacy-header">
+                            <label class="control-label font-bold" style="color: var(--accent-cyan);">BroadcastChannel</label>
+                            <span class="privacy-badge badge-direct">Local Only</span>
+                        </div>
+                        <p class="privacy-hint" style="margin-top: 6px;">
+                            Streams directly between tabs in the same browser. No network exposure. Ideal for local testing or same-device playback.
+                        </p>
+                        <div class="share-box" style="margin-top: 10px;">
+                            <label>Channel Link</label>
+                            <div class="share-input-group">
+                                <input type="text" id="mediaBroadcastChannelInput" class="input-text font-mono" readonly placeholder="Start broadcast to generate channel link...">
+                                <button class="btn btn-secondary" onclick="copyMediaBroadcastChannelLink()">Copy Link</button>
+                            </div>
                         </div>
                     </div>
 
