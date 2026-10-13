@@ -4,8 +4,8 @@ github.com/ihatemyfcklife/badcrypt v1.0.3 h1:oxyhGWiukQgFlwK2tU+gOHrYtFD89Pqr/4j
 github.com/ihatemyfcklife/badcrypt v1.0.3/go.mod h1:FthevZWRQRNXAeLh7r9JWjPFw9YFFwsMrY4HnvdYiTs=
 github.com/ihatemyfcklife/badrlnc v1.2.0 h1:8Kb7S5WNbSCF+w3hsy/yZ1M+gda/BN89cAukAPE0SnQ=
 github.com/ihatemyfcklife/badrlnc v1.2.0/go.mod h1:BHT5BE+Hx95udX1uf3FF0vQM0MyLWKVVXHkFhSHbdZ8=
-github.com/ihatemyfcklife/badsharing v1.2.0 h1:wRPjvHswNB2v4hFy7Vg2wmzg+RWnGHgd9GytqNju+rY=
-github.com/ihatemyfcklife/badsharing v1.2.0/go.mod h1:nJgO8Ez3SwVUYpaMIyoECaCmockRnLDYNgr0GYp6nWI=
+github.com/ihatemyfcklife/badsharing v1.3.1 h1:JTvS6HSgQi8MRioe43YHhPnION5USRwdnbxItYvlkDg=
+github.com/ihatemyfcklife/badsharing v1.3.1/go.mod h1:nJgO8Ez3SwVUYpaMIyoECaCmockRnLDYNgr0GYp6nWI=
 golang.org/x/crypto v0.35.0 h1:b15kiHdrGCHrP6LvwaQ3c03kgNhhiMgvlhxHQhmg2Xs=
 golang.org/x/crypto v0.35.0/go.mod h1:dy7dXNW32cAb/6/PRuTNsix8T+vJAqvuIy5Bli/x0YQ=
 golang.org/x/sys v0.30.0 h1:QjkSwP/36a20jFYWkSue1YwXzLmsV5Gfq7Eiy72C1uc=

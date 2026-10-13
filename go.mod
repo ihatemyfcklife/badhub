@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/ihatemyfcklife/badcrypt v1.0.3
-	github.com/ihatemyfcklife/badsharing v1.2.0
+	github.com/ihatemyfcklife/badsharing v1.3.1
 )
 
 require (
